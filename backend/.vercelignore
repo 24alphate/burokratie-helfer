@@ -1,0 +1,12 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.db
+test.db
+tests/
+uploads/
+generated/
+.env
+create_blank_pdf.py
+requirements-dev.txt

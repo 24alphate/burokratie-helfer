@@ -1,19 +1,28 @@
 import json
+import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Vercel sets VERCEL=1 in all serverless environments
+IS_VERCEL = os.environ.get("VERCEL") == "1"
+
+# On Vercel, /tmp is the only writable directory (ephemeral between cold starts)
+_TMP = "/tmp"
+_DEFAULT_DB = f"sqlite:///{_TMP}/burokratie.db" if IS_VERCEL else f"sqlite:///{BASE_DIR}/burokratie.db"
+_DEFAULT_UPLOAD = f"{_TMP}/uploads" if IS_VERCEL else str(BASE_DIR / "uploads")
+_DEFAULT_GENERATED = f"{_TMP}/generated" if IS_VERCEL else str(BASE_DIR / "generated")
+
 
 class Settings(BaseSettings):
-    database_url: str = f"sqlite:///{BASE_DIR}/burokratie.db"
+    database_url: str = _DEFAULT_DB
     ocr_backend: str = "mock"
     translation_backend: str = "mock"
-    upload_dir: str = str(BASE_DIR / "uploads")
-    generated_dir: str = str(BASE_DIR / "generated")
+    upload_dir: str = _DEFAULT_UPLOAD
+    generated_dir: str = _DEFAULT_GENERATED
     static_pdfs_dir: str = str(BASE_DIR / "static_pdfs")
     form_templates_dir: str = str(Path(__file__).resolve().parent / "form_templates")
-    # Accepts comma-separated string OR JSON array for Railway/Vercel env var compatibility
     cors_origins_raw: str = "http://localhost:3000"
     max_upload_size_mb: int = 10
     port: int = 8000

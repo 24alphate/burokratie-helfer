@@ -1,10 +1,12 @@
+import json
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.database import engine
+from app.database import engine, SessionLocal
 from app.database import Base
 import app.models  # noqa: F401 — ensures all models registered before table creation
 
@@ -14,12 +16,29 @@ from app.services.translation import TranslationServiceFactory
 from app.services.pdf_generator.pypdf_generator import PDFGeneratorFactory
 
 
+def _seed_templates_if_needed():
+    """Seed form templates on startup. Safe to run multiple times (idempotent)."""
+    from app.form_templates.seed import seed_template
+    from app.models.form_template import FormTemplate
+
+    templates_dir = Path(settings.form_templates_dir)
+    db = SessionLocal()
+    try:
+        for json_file in templates_dir.glob("*.json"):
+            with open(json_file, encoding="utf-8") as f:
+                data = json.load(f)
+            existing = db.query(FormTemplate).filter(FormTemplate.id == data["id"]).first()
+            if not existing:
+                seed_template(db, data)
+    finally:
+        db.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Create tables if they don't exist (Alembic handles migrations; this is a safety net)
     Base.metadata.create_all(bind=engine)
+    _seed_templates_if_needed()
 
-    # Wire up service implementations — swap via env vars, zero route changes needed
     app.state.ocr_service = OCRServiceFactory.create(settings.ocr_backend)
     app.state.translation_service = TranslationServiceFactory.create(settings.translation_backend)
     app.state.pdf_generator = PDFGeneratorFactory.create("pypdf")
