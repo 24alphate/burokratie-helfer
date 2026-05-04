@@ -2,494 +2,454 @@
   "id": "alg2_antrag_v1",
   "name": "Antrag auf Arbeitslosengeld II",
   "institution": "Jobcenter",
-  "version": "1.0",
+  "version": "2.0",
   "supported_languages": ["de", "en", "ar", "tr"],
   "blank_pdf_filename": "alg2_blank.pdf",
   "pdf_field_map": {
     "first_name": "Vorname",
     "last_name": "Familienname",
     "date_of_birth": "Geburtsdatum",
+    "birth_place": "Geburtsort",
     "nationality": "Staatsangehörigkeit",
+    "marital_status": "Familienstand",
+    "phone": "Telefonnummer",
     "street_address": "StraßeHausnummer",
     "postal_code": "Postleitzahl",
     "city": "Ort",
+    "housing_type": "Unterkunftsart",
+    "cold_rent": "Kaltmiete",
+    "utilities": "Betriebskosten",
+    "heating_costs": "Heizkosten",
     "employment_status": "Beschäftigungsstatus",
+    "employer_name": "Arbeitgeber",
+    "employment_start_date": "BeschäftigtSeit",
+    "weekly_hours": "Wochenstunden",
     "monthly_income": "MonatlichesEinkommen",
+    "receives_kindergeld": "Kindergeld",
+    "kindergeld_amount": "KindergeldBetrag",
+    "receives_unterhalt": "Unterhalt",
+    "unterhalt_amount": "UnterhaltBetrag",
+    "receives_other_income": "SonstigeEinnahmen",
+    "other_income_amount": "SonstigeEinnahmenBetrag",
+    "has_savings": "Ersparnis",
+    "savings_amount": "ErsparnisBetrag",
     "has_partner": "LebenspartnerVorhanden",
     "partner_first_name": "PartnerVorname",
     "partner_last_name": "PartnerFamilienname",
+    "partner_employment_status": "PartnerBeschäftigungsstatus",
+    "partner_monthly_income": "PartnerEinkommen",
     "children_count": "AnzahlKinder",
+    "child1_first_name": "Kind1Vorname",
+    "child1_date_of_birth": "Kind1Geburtsdatum",
     "iban": "IBAN",
+    "bank_name": "Kreditinstitut",
     "signature_date": "Datum"
   },
   "fields": [
-    {"field_key": "first_name",       "pdf_field_name": "Vorname",                 "data_type": "text",    "required": true},
-    {"field_key": "last_name",        "pdf_field_name": "Familienname",            "data_type": "text",    "required": true},
-    {"field_key": "date_of_birth",    "pdf_field_name": "Geburtsdatum",            "data_type": "date",    "required": true},
-    {"field_key": "nationality",      "pdf_field_name": "Staatsangehörigkeit",     "data_type": "text",    "required": true},
-    {"field_key": "street_address",   "pdf_field_name": "StraßeHausnummer",        "data_type": "text",    "required": true},
-    {"field_key": "postal_code",      "pdf_field_name": "Postleitzahl",            "data_type": "text",    "required": true},
-    {"field_key": "city",             "pdf_field_name": "Ort",                     "data_type": "text",    "required": true},
-    {"field_key": "employment_status","pdf_field_name": "Beschäftigungsstatus",    "data_type": "select",  "required": true},
-    {"field_key": "monthly_income",   "pdf_field_name": "MonatlichesEinkommen",    "data_type": "text",    "required": false},
-    {"field_key": "has_partner",      "pdf_field_name": "LebenspartnerVorhanden",  "data_type": "boolean", "required": true},
-    {"field_key": "partner_first_name","pdf_field_name": "PartnerVorname",         "data_type": "text",    "required": false},
-    {"field_key": "partner_last_name","pdf_field_name": "PartnerFamilienname",     "data_type": "text",    "required": false},
-    {"field_key": "children_count",   "pdf_field_name": "AnzahlKinder",            "data_type": "text",    "required": true},
-    {"field_key": "iban",             "pdf_field_name": "IBAN",                    "data_type": "text",    "required": true},
-    {"field_key": "signature_date",   "pdf_field_name": "Datum",                   "data_type": "date",    "required": true}
+    {"field_key": "first_name",             "pdf_field_name": "Vorname",              "data_type": "text",    "required": true},
+    {"field_key": "last_name",              "pdf_field_name": "Familienname",         "data_type": "text",    "required": true},
+    {"field_key": "date_of_birth",          "pdf_field_name": "Geburtsdatum",         "data_type": "date",    "required": true},
+    {"field_key": "birth_place",            "pdf_field_name": "Geburtsort",           "data_type": "text",    "required": true},
+    {"field_key": "nationality",            "pdf_field_name": "Staatsangehörigkeit",  "data_type": "text",    "required": true},
+    {"field_key": "marital_status",         "pdf_field_name": "Familienstand",        "data_type": "select",  "required": true},
+    {"field_key": "phone",                  "pdf_field_name": "Telefonnummer",        "data_type": "text",    "required": false},
+    {"field_key": "street_address",         "pdf_field_name": "StraßeHausnummer",     "data_type": "text",    "required": true},
+    {"field_key": "postal_code",            "pdf_field_name": "Postleitzahl",         "data_type": "text",    "required": true},
+    {"field_key": "city",                   "pdf_field_name": "Ort",                  "data_type": "text",    "required": true},
+    {"field_key": "housing_type",           "pdf_field_name": "Unterkunftsart",       "data_type": "select",  "required": true},
+    {"field_key": "cold_rent",              "pdf_field_name": "Kaltmiete",            "data_type": "text",    "required": false},
+    {"field_key": "utilities",              "pdf_field_name": "Betriebskosten",       "data_type": "text",    "required": false},
+    {"field_key": "heating_costs",          "pdf_field_name": "Heizkosten",           "data_type": "text",    "required": false},
+    {"field_key": "employment_status",      "pdf_field_name": "Beschäftigungsstatus", "data_type": "select",  "required": true},
+    {"field_key": "employer_name",          "pdf_field_name": "Arbeitgeber",          "data_type": "text",    "required": false},
+    {"field_key": "employment_start_date",  "pdf_field_name": "BeschäftigtSeit",      "data_type": "date",    "required": false},
+    {"field_key": "weekly_hours",           "pdf_field_name": "Wochenstunden",        "data_type": "text",    "required": false},
+    {"field_key": "monthly_income",         "pdf_field_name": "MonatlichesEinkommen", "data_type": "text",    "required": false},
+    {"field_key": "receives_kindergeld",    "pdf_field_name": "Kindergeld",           "data_type": "boolean", "required": true},
+    {"field_key": "kindergeld_amount",      "pdf_field_name": "KindergeldBetrag",     "data_type": "text",    "required": false},
+    {"field_key": "receives_unterhalt",     "pdf_field_name": "Unterhalt",            "data_type": "boolean", "required": true},
+    {"field_key": "unterhalt_amount",       "pdf_field_name": "UnterhaltBetrag",      "data_type": "text",    "required": false},
+    {"field_key": "receives_other_income",  "pdf_field_name": "SonstigeEinnahmen",    "data_type": "boolean", "required": true},
+    {"field_key": "other_income_amount",    "pdf_field_name": "SonstigeEinnahmenBetrag","data_type":"text",   "required": false},
+    {"field_key": "has_savings",            "pdf_field_name": "Ersparnis",            "data_type": "boolean", "required": true},
+    {"field_key": "savings_amount",         "pdf_field_name": "ErsparnisBetrag",      "data_type": "text",    "required": false},
+    {"field_key": "has_partner",            "pdf_field_name": "LebenspartnerVorhanden","data_type":"boolean", "required": true},
+    {"field_key": "partner_first_name",     "pdf_field_name": "PartnerVorname",       "data_type": "text",    "required": false},
+    {"field_key": "partner_last_name",      "pdf_field_name": "PartnerFamilienname",  "data_type": "text",    "required": false},
+    {"field_key": "partner_employment_status","pdf_field_name":"PartnerBeschäftigungsstatus","data_type":"select","required":false},
+    {"field_key": "partner_monthly_income", "pdf_field_name": "PartnerEinkommen",     "data_type": "text",    "required": false},
+    {"field_key": "children_count",         "pdf_field_name": "AnzahlKinder",         "data_type": "text",    "required": true},
+    {"field_key": "child1_first_name",      "pdf_field_name": "Kind1Vorname",         "data_type": "text",    "required": false},
+    {"field_key": "child1_date_of_birth",   "pdf_field_name": "Kind1Geburtsdatum",    "data_type": "date",    "required": false},
+    {"field_key": "iban",                   "pdf_field_name": "IBAN",                 "data_type": "text",    "required": true},
+    {"field_key": "bank_name",              "pdf_field_name": "Kreditinstitut",       "data_type": "text",    "required": false},
+    {"field_key": "signature_date",         "pdf_field_name": "Datum",                "data_type": "date",    "required": true}
   ],
   "questions": [
     {
-      "id": "q_first_name",
-      "field_key": "first_name",
-      "order_index": 1,
-      "input_type": "text",
-      "condition": null,
-      "question_text": {
-        "en": "What is your first name?",
-        "ar": "ما هو اسمك الأول؟",
-        "tr": "Adınız nedir?",
-        "de": "Wie lautet Ihr Vorname?"
-      },
-      "explanation_text": {
-        "en": "Enter your first name exactly as it appears on your passport or ID card.",
-        "ar": "أدخل اسمك الأول كما يظهر في جواز سفرك أو بطاقة هويتك.",
-        "tr": "Adınızı pasaportunuzda veya kimliğinizde göründüğü gibi tam olarak girin.",
-        "de": "Geben Sie Ihren Vornamen genau so ein, wie er in Ihrem Pass oder Personalausweis steht."
-      },
-      "options": null,
+      "id": "q_first_name", "field_key": "first_name", "order_index": 1, "input_type": "text", "condition": null, "options": null,
+      "question_text": {"en": "What is your first name?", "ar": "ما هو اسمك الأول؟", "tr": "Adınız nedir?", "de": "Wie lautet Ihr Vorname?"},
+      "explanation_text": {"en": "Enter your first name exactly as it appears on your passport or ID.", "ar": "أدخل اسمك الأول كما يظهر في جواز سفرك.", "tr": "Adınızı pasaportunuzda göründüğü gibi girin.", "de": "Geben Sie Ihren Vornamen genau wie im Pass an."},
       "validation_rules": [
-        {
-          "rule_type": "required",
-          "rule_value": null,
-          "error_message": {"en": "First name is required.", "ar": "الاسم الأول مطلوب.", "tr": "Ad gereklidir.", "de": "Vorname ist erforderlich."}
-        },
-        {
-          "rule_type": "max_length",
-          "rule_value": "50",
-          "error_message": {"en": "First name must be 50 characters or fewer.", "ar": "يجب ألا يتجاوز الاسم الأول 50 حرفاً.", "tr": "Ad en fazla 50 karakter olmalıdır.", "de": "Der Vorname darf höchstens 50 Zeichen lang sein."}
-        }
+        {"rule_type": "required", "rule_value": null, "error_message": {"en": "First name is required.", "ar": "الاسم الأول مطلوب.", "tr": "Ad gereklidir.", "de": "Vorname erforderlich."}},
+        {"rule_type": "max_length", "rule_value": "50", "error_message": {"en": "Max 50 characters.", "ar": "50 حرفاً كحد أقصى.", "tr": "En fazla 50 karakter.", "de": "Maximal 50 Zeichen."}}
       ]
     },
     {
-      "id": "q_last_name",
-      "field_key": "last_name",
-      "order_index": 2,
-      "input_type": "text",
-      "condition": null,
-      "question_text": {
-        "en": "What is your family name (surname)?",
-        "ar": "ما هو اسم عائلتك (اللقب)؟",
-        "tr": "Soyadınız nedir?",
-        "de": "Wie lautet Ihr Familienname?"
-      },
-      "explanation_text": {
-        "en": "This is your last name as shown on your official documents.",
-        "ar": "هذا هو اسم عائلتك كما هو مدوّن في وثائقك الرسمية.",
-        "tr": "Bu, resmi belgelerinizde gösterilen soyadınızdır.",
-        "de": "Dies ist Ihr Nachname, wie er auf Ihren offiziellen Dokumenten steht."
-      },
-      "options": null,
+      "id": "q_last_name", "field_key": "last_name", "order_index": 2, "input_type": "text", "condition": null, "options": null,
+      "question_text": {"en": "What is your family name?", "ar": "ما هو اسم عائلتك؟", "tr": "Soyadınız nedir?", "de": "Wie lautet Ihr Familienname?"},
+      "explanation_text": {"en": "Your surname as on your official ID.", "ar": "اسم عائلتك كما في بطاقة هويتك.", "tr": "Resmi kimliğinizdeki soyadınız.", "de": "Ihr Nachname wie im Ausweis."},
       "validation_rules": [
-        {
-          "rule_type": "required",
-          "rule_value": null,
-          "error_message": {"en": "Family name is required.", "ar": "اسم العائلة مطلوب.", "tr": "Soyad gereklidir.", "de": "Familienname ist erforderlich."}
-        },
-        {
-          "rule_type": "max_length",
-          "rule_value": "80",
-          "error_message": {"en": "Family name must be 80 characters or fewer.", "ar": "يجب ألا يتجاوز اسم العائلة 80 حرفاً.", "tr": "Soyad en fazla 80 karakter olmalıdır.", "de": "Der Familienname darf höchstens 80 Zeichen lang sein."}
-        }
+        {"rule_type": "required", "rule_value": null, "error_message": {"en": "Family name is required.", "ar": "اسم العائلة مطلوب.", "tr": "Soyad gereklidir.", "de": "Familienname erforderlich."}}
       ]
     },
     {
-      "id": "q_date_of_birth",
-      "field_key": "date_of_birth",
-      "order_index": 3,
-      "input_type": "date",
-      "condition": null,
-      "question_text": {
-        "en": "What is your date of birth?",
-        "ar": "ما هو تاريخ ميلادك؟",
-        "tr": "Doğum tarihiniz nedir?",
-        "de": "Was ist Ihr Geburtsdatum?"
-      },
-      "explanation_text": {
-        "en": "Enter your date of birth. Use the format DD.MM.YYYY (day.month.year). Example: 15.03.1985",
-        "ar": "أدخل تاريخ ميلادك. استخدم الصيغة يوم.شهر.سنة. مثال: 15.03.1985",
-        "tr": "Doğum tarihinizi girin. GG.AA.YYYY formatını kullanın. Örnek: 15.03.1985",
-        "de": "Geben Sie Ihr Geburtsdatum im Format TT.MM.JJJJ ein. Beispiel: 15.03.1985"
-      },
-      "options": null,
+      "id": "q_date_of_birth", "field_key": "date_of_birth", "order_index": 3, "input_type": "date", "condition": null, "options": null,
+      "question_text": {"en": "What is your date of birth?", "ar": "ما هو تاريخ ميلادك؟", "tr": "Doğum tarihiniz nedir?", "de": "Was ist Ihr Geburtsdatum?"},
+      "explanation_text": {"en": "Enter your date of birth. Example: 15.03.1985", "ar": "أدخل تاريخ ميلادك. مثال: 15.03.1985", "tr": "Doğum tarihinizi girin. Örnek: 15.03.1985", "de": "Geben Sie Ihr Geburtsdatum ein. Beispiel: 15.03.1985"},
       "validation_rules": [
-        {
-          "rule_type": "required",
-          "rule_value": null,
-          "error_message": {"en": "Date of birth is required.", "ar": "تاريخ الميلاد مطلوب.", "tr": "Doğum tarihi gereklidir.", "de": "Geburtsdatum ist erforderlich."}
-        },
-        {
-          "rule_type": "date_range",
-          "rule_value": "{\"min_age\": 16, \"max_age\": 120}",
-          "error_message": {"en": "Please enter a valid date of birth. You must be at least 16 years old.", "ar": "يرجى إدخال تاريخ ميلاد صحيح. يجب أن يكون عمرك 16 سنة على الأقل.", "tr": "Lütfen geçerli bir doğum tarihi girin. En az 16 yaşında olmalısınız.", "de": "Bitte geben Sie ein gültiges Geburtsdatum ein. Sie müssen mindestens 16 Jahre alt sein."}
-        }
+        {"rule_type": "required", "rule_value": null, "error_message": {"en": "Date of birth is required.", "ar": "تاريخ الميلاد مطلوب.", "tr": "Doğum tarihi gereklidir.", "de": "Geburtsdatum erforderlich."}},
+        {"rule_type": "date_range", "rule_value": "{\"min_age\": 16, \"max_age\": 120}", "error_message": {"en": "Please enter a valid date of birth.", "ar": "أدخل تاريخ ميلاد صحيح.", "tr": "Geçerli bir doğum tarihi girin.", "de": "Gültiges Geburtsdatum eingeben."}}
       ]
     },
     {
-      "id": "q_nationality",
-      "field_key": "nationality",
-      "order_index": 4,
-      "input_type": "text",
-      "condition": null,
-      "question_text": {
-        "en": "What is your nationality?",
-        "ar": "ما هي جنسيتك؟",
-        "tr": "Uyruğunuz nedir?",
-        "de": "Was ist Ihre Staatsangehörigkeit?"
-      },
-      "explanation_text": {
-        "en": "Write your nationality as stated on your passport. Example: Syrian, Turkish, Afghan.",
-        "ar": "اكتب جنسيتك كما هو مذكور في جواز سفرك. مثال: سوري، تركي، أفغاني.",
-        "tr": "Pasaportunuzda belirtildiği gibi uyruğunuzu yazın. Örnek: Suriyeli, Türk, Afganlı.",
-        "de": "Schreiben Sie Ihre Staatsangehörigkeit so, wie sie in Ihrem Pass angegeben ist."
-      },
-      "options": null,
+      "id": "q_birth_place", "field_key": "birth_place", "order_index": 4, "input_type": "text", "condition": null, "options": null,
+      "question_text": {"en": "What is your place of birth?", "ar": "ما هو مكان ميلادك؟", "tr": "Doğum yeriniz neresi?", "de": "Was ist Ihr Geburtsort?"},
+      "explanation_text": {"en": "Write the city or town where you were born. Example: Damascus, Ankara, Kabul", "ar": "اكتب المدينة أو البلدة التي وُلدت فيها. مثال: دمشق، القاهرة، بغداد", "tr": "Doğduğunuz şehri yazın. Örnek: Şam, Ankara, İstanbul", "de": "Schreiben Sie die Stadt, in der Sie geboren wurden."},
       "validation_rules": [
-        {
-          "rule_type": "required",
-          "rule_value": null,
-          "error_message": {"en": "Nationality is required.", "ar": "الجنسية مطلوبة.", "tr": "Uyruk gereklidir.", "de": "Staatsangehörigkeit ist erforderlich."}
-        }
+        {"rule_type": "required", "rule_value": null, "error_message": {"en": "Place of birth is required.", "ar": "مكان الميلاد مطلوب.", "tr": "Doğum yeri gereklidir.", "de": "Geburtsort erforderlich."}}
       ]
     },
     {
-      "id": "q_street_address",
-      "field_key": "street_address",
-      "order_index": 5,
-      "input_type": "text",
-      "condition": null,
-      "question_text": {
-        "en": "What is your street address and house number?",
-        "ar": "ما هو عنوان شارعك ورقم المنزل؟",
-        "tr": "Sokak adresiniz ve kapı numaranız nedir?",
-        "de": "Was ist Ihre Straße und Hausnummer?"
-      },
-      "explanation_text": {
-        "en": "Write the name of your street and your house number. Example: Hauptstraße 12",
-        "ar": "اكتب اسم شارعك ورقم المنزل. مثال: Hauptstraße 12",
-        "tr": "Sokak adınızı ve kapı numaranızı yazın. Örnek: Hauptstraße 12",
-        "de": "Schreiben Sie Ihren Straßennamen und Ihre Hausnummer. Beispiel: Hauptstraße 12"
-      },
-      "options": null,
+      "id": "q_nationality", "field_key": "nationality", "order_index": 5, "input_type": "text", "condition": null, "options": null,
+      "question_text": {"en": "What is your nationality?", "ar": "ما هي جنسيتك؟", "tr": "Uyruğunuz nedir?", "de": "Was ist Ihre Staatsangehörigkeit?"},
+      "explanation_text": {"en": "Write your nationality as in your passport. Example: Syrian, Turkish, Afghan", "ar": "اكتب جنسيتك كما في جواز سفرك. مثال: سوري، تركي، أفغاني", "tr": "Pasaportunuzdaki uyruğunuzu yazın. Örnek: Suriyeli, Türk, Afganlı", "de": "Schreiben Sie Ihre Staatsangehörigkeit wie im Pass."},
       "validation_rules": [
-        {
-          "rule_type": "required",
-          "rule_value": null,
-          "error_message": {"en": "Street address is required.", "ar": "عنوان الشارع مطلوب.", "tr": "Sokak adresi gereklidir.", "de": "Straße und Hausnummer sind erforderlich."}
-        }
+        {"rule_type": "required", "rule_value": null, "error_message": {"en": "Nationality is required.", "ar": "الجنسية مطلوبة.", "tr": "Uyruk gereklidir.", "de": "Staatsangehörigkeit erforderlich."}}
       ]
     },
     {
-      "id": "q_postal_code",
-      "field_key": "postal_code",
-      "order_index": 6,
-      "input_type": "text",
-      "condition": null,
-      "question_text": {
-        "en": "What is your postal code (PLZ)?",
-        "ar": "ما هو الرمز البريدي (PLZ)؟",
-        "tr": "Posta kodunuz (PLZ) nedir?",
-        "de": "Was ist Ihre Postleitzahl (PLZ)?"
-      },
-      "explanation_text": {
-        "en": "The German postal code is 5 digits. Example: 10117",
-        "ar": "الرمز البريدي الألماني مكوّن من 5 أرقام. مثال: 10117",
-        "tr": "Alman posta kodu 5 haneden oluşur. Örnek: 10117",
-        "de": "Die deutsche Postleitzahl besteht aus 5 Ziffern. Beispiel: 10117"
-      },
-      "options": null,
-      "validation_rules": [
-        {
-          "rule_type": "required",
-          "rule_value": null,
-          "error_message": {"en": "Postal code is required.", "ar": "الرمز البريدي مطلوب.", "tr": "Posta kodu gereklidir.", "de": "Postleitzahl ist erforderlich."}
-        },
-        {
-          "rule_type": "regex",
-          "rule_value": "^\\d{5}$",
-          "error_message": {"en": "Postal code must be exactly 5 digits.", "ar": "يجب أن يتكوّن الرمز البريدي من 5 أرقام بالضبط.", "tr": "Posta kodu tam olarak 5 rakamdan oluşmalıdır.", "de": "Die Postleitzahl muss genau 5 Ziffern haben."}
-        }
-      ]
-    },
-    {
-      "id": "q_city",
-      "field_key": "city",
-      "order_index": 7,
-      "input_type": "text",
-      "condition": null,
-      "question_text": {
-        "en": "What city do you live in?",
-        "ar": "في أي مدينة تعيش؟",
-        "tr": "Hangi şehirde yaşıyorsunuz?",
-        "de": "In welcher Stadt wohnen Sie?"
-      },
-      "explanation_text": {
-        "en": "Write the name of your city or town. Example: Berlin, Hamburg, München",
-        "ar": "اكتب اسم مدينتك أو بلدتك. مثال: Berlin, Hamburg, München",
-        "tr": "Şehrinizin veya ilçenizin adını yazın. Örnek: Berlin, Hamburg, München",
-        "de": "Schreiben Sie den Namen Ihrer Stadt oder Gemeinde."
-      },
-      "options": null,
-      "validation_rules": [
-        {
-          "rule_type": "required",
-          "rule_value": null,
-          "error_message": {"en": "City is required.", "ar": "المدينة مطلوبة.", "tr": "Şehir gereklidir.", "de": "Ort ist erforderlich."}
-        }
-      ]
-    },
-    {
-      "id": "q_employment_status",
-      "field_key": "employment_status",
-      "order_index": 8,
-      "input_type": "select",
-      "condition": null,
-      "question_text": {
-        "en": "What is your current employment status?",
-        "ar": "ما هو وضعك الوظيفي الحالي؟",
-        "tr": "Mevcut istihdam durumunuz nedir?",
-        "de": "Was ist Ihr aktueller Beschäftigungsstatus?"
-      },
-      "explanation_text": {
-        "en": "Select the option that best describes your situation right now.",
-        "ar": "اختر الخيار الذي يصف وضعك الحالي بشكل أفضل.",
-        "tr": "Şu anki durumunuzu en iyi tanımlayan seçeneği seçin.",
-        "de": "Wählen Sie die Option, die Ihre aktuelle Situation am besten beschreibt."
-      },
+      "id": "q_marital_status", "field_key": "marital_status", "order_index": 6, "input_type": "select", "condition": null,
       "options": [
-        {
-          "value": "unemployed",
-          "label": {"en": "Unemployed (not working, looking for work)", "ar": "عاطل عن العمل (لا يعمل، يبحث عن عمل)", "tr": "İşsiz (çalışmıyor, iş arıyor)", "de": "Arbeitslos (nicht erwerbstätig, arbeitssuchend)"}
-        },
-        {
-          "value": "part_time",
-          "label": {"en": "Part-time employed", "ar": "عمل بدوام جزئي", "tr": "Yarı zamanlı çalışan", "de": "Teilzeitbeschäftigt"}
-        },
-        {
-          "value": "self_employed",
-          "label": {"en": "Self-employed / freelance", "ar": "عمل حر / مستقل", "tr": "Serbest meslek / freelance", "de": "Selbstständig / freiberuflich"}
-        },
-        {
-          "value": "not_working",
-          "label": {"en": "Not working (other reason, e.g. caregiver, student)", "ar": "لا يعمل (سبب آخر، مثل: مقدّم رعاية، طالب)", "tr": "Çalışmıyor (başka neden, örn. bakıcı, öğrenci)", "de": "Nicht erwerbstätig (anderer Grund, z.B. Pflegeperson, Student)"}
-        }
+        {"value": "single", "label": {"en": "Single (never married)", "ar": "أعزب/عزباء (لم يتزوج قط)", "tr": "Bekar (hiç evlenmemiş)", "de": "Ledig"}},
+        {"value": "married", "label": {"en": "Married", "ar": "متزوج/ة", "tr": "Evli", "de": "Verheiratet"}},
+        {"value": "civil_partnership", "label": {"en": "Registered civil partnership", "ar": "شراكة مدنية مسجلة", "tr": "Kayıtlı birliktelik", "de": "Eingetragene Lebenspartnerschaft"}},
+        {"value": "separated", "label": {"en": "Separated (living apart from spouse)", "ar": "منفصل/ة (يعيش بعيداً عن الزوج)", "tr": "Ayrı yaşıyor", "de": "Getrennt lebend"}},
+        {"value": "divorced", "label": {"en": "Divorced", "ar": "مطلق/ة", "tr": "Boşanmış", "de": "Geschieden"}},
+        {"value": "widowed", "label": {"en": "Widowed", "ar": "أرمل/ة", "tr": "Dul", "de": "Verwitwet"}}
       ],
+      "question_text": {"en": "What is your marital status?", "ar": "ما هي حالتك الاجتماعية؟", "tr": "Medeni durumunuz nedir?", "de": "Was ist Ihr Familienstand?"},
+      "explanation_text": {"en": "Select the option that best describes your current situation.", "ar": "اختر الخيار الذي يصف وضعك الحالي.", "tr": "Mevcut durumunuzu en iyi tanımlayan seçeneği seçin.", "de": "Wählen Sie den zutreffenden Familienstand."},
       "validation_rules": [
-        {
-          "rule_type": "required",
-          "rule_value": null,
-          "error_message": {"en": "Please select your employment status.", "ar": "يرجى تحديد وضعك الوظيفي.", "tr": "Lütfen istihdam durumunuzu seçin.", "de": "Bitte wählen Sie Ihren Beschäftigungsstatus aus."}
-        }
+        {"rule_type": "required", "rule_value": null, "error_message": {"en": "Marital status is required.", "ar": "الحالة الاجتماعية مطلوبة.", "tr": "Medeni durum gereklidir.", "de": "Familienstand erforderlich."}}
       ]
     },
     {
-      "id": "q_monthly_income",
-      "field_key": "monthly_income",
-      "order_index": 9,
-      "input_type": "text",
+      "id": "q_phone", "field_key": "phone", "order_index": 7, "input_type": "text", "condition": null, "options": null,
+      "question_text": {"en": "What is your phone number?", "ar": "ما هو رقم هاتفك؟", "tr": "Telefon numaranız nedir?", "de": "Was ist Ihre Telefonnummer?"},
+      "explanation_text": {"en": "Your mobile or home phone number. The Jobcenter may call you. Example: 0151 12345678", "ar": "رقم هاتفك المحمول أو المنزل. قد يتصل بك مركز التشغيل. مثال: 0151 12345678", "tr": "Cep veya ev telefon numaranız. Jobcenter sizi arayabilir. Örnek: 0151 12345678", "de": "Ihre Mobilnummer oder Festnetznummer. Beispiel: 0151 12345678"},
+      "validation_rules": []
+    },
+    {
+      "id": "q_street_address", "field_key": "street_address", "order_index": 8, "input_type": "text", "condition": null, "options": null,
+      "question_text": {"en": "What is your street address and house number?", "ar": "ما هو عنوان شارعك ورقم المنزل؟", "tr": "Sokak adresiniz ve kapı numaranız?", "de": "Straße und Hausnummer?"},
+      "explanation_text": {"en": "Write your street name and house number. Example: Hauptstraße 12", "ar": "اكتب اسم الشارع ورقم المنزل. مثال: Hauptstraße 12", "tr": "Sokak adı ve kapı numaranızı yazın. Örnek: Hauptstraße 12", "de": "Schreiben Sie Straße und Hausnummer. Beispiel: Hauptstraße 12"},
+      "validation_rules": [
+        {"rule_type": "required", "rule_value": null, "error_message": {"en": "Street address is required.", "ar": "عنوان الشارع مطلوب.", "tr": "Sokak adresi gereklidir.", "de": "Straße erforderlich."}}
+      ]
+    },
+    {
+      "id": "q_postal_code", "field_key": "postal_code", "order_index": 9, "input_type": "text", "condition": null, "options": null,
+      "question_text": {"en": "What is your postal code (PLZ)?", "ar": "ما هو الرمز البريدي؟", "tr": "Posta kodunuz (PLZ)?", "de": "Was ist Ihre Postleitzahl?"},
+      "explanation_text": {"en": "5-digit German postal code. Example: 10117", "ar": "الرمز البريدي الألماني من 5 أرقام. مثال: 10117", "tr": "5 haneli Alman posta kodu. Örnek: 10117", "de": "5-stellige Postleitzahl. Beispiel: 10117"},
+      "validation_rules": [
+        {"rule_type": "required", "rule_value": null, "error_message": {"en": "Postal code is required.", "ar": "الرمز البريدي مطلوب.", "tr": "Posta kodu gereklidir.", "de": "Postleitzahl erforderlich."}},
+        {"rule_type": "regex", "rule_value": "^\\d{5}$", "error_message": {"en": "Must be exactly 5 digits.", "ar": "يجب أن يكون 5 أرقام بالضبط.", "tr": "Tam olarak 5 rakam olmalıdır.", "de": "Muss genau 5 Ziffern haben."}}
+      ]
+    },
+    {
+      "id": "q_city", "field_key": "city", "order_index": 10, "input_type": "text", "condition": null, "options": null,
+      "question_text": {"en": "What city do you live in?", "ar": "في أي مدينة تعيش؟", "tr": "Hangi şehirde yaşıyorsunuz?", "de": "In welcher Stadt wohnen Sie?"},
+      "explanation_text": {"en": "Write your city or town name.", "ar": "اكتب اسم مدينتك.", "tr": "Şehir adınızı yazın.", "de": "Schreiben Sie Ihren Wohnort."},
+      "validation_rules": [
+        {"rule_type": "required", "rule_value": null, "error_message": {"en": "City is required.", "ar": "المدينة مطلوبة.", "tr": "Şehir gereklidir.", "de": "Ort erforderlich."}}
+      ]
+    },
+    {
+      "id": "q_housing_type", "field_key": "housing_type", "order_index": 11, "input_type": "select", "condition": null,
+      "options": [
+        {"value": "renting", "label": {"en": "Renting (paying rent to a landlord)", "ar": "إيجار (أدفع إيجاراً لمالك)", "tr": "Kiracı (ev sahibine kira ödüyor)", "de": "Mieter (zahle Miete)"}},
+        {"value": "subletting", "label": {"en": "Subletting (renting a room within a flat)", "ar": "إيجار غرفة في شقة", "tr": "Alt kiracı (dairede oda kiralıyor)", "de": "Untermiete (Zimmer in Wohnung)"}},
+        {"value": "owner", "label": {"en": "Owner (I own the property)", "ar": "مالك (أملك العقار)", "tr": "Mülk sahibi", "de": "Eigentümer"}},
+        {"value": "relatives", "label": {"en": "Living with relatives (no rent paid)", "ar": "أقيم مع الأقارب (بدون إيجار)", "tr": "Akrabalarla yaşıyor (kira yok)", "de": "Wohne bei Verwandten (ohne Miete)"}},
+        {"value": "shelter", "label": {"en": "Homeless shelter or temporary accommodation", "ar": "ملجأ أو إقامة مؤقتة", "tr": "Barınak veya geçici konaklama", "de": "Obdachlosenunterkunft"}}
+      ],
+      "question_text": {"en": "What type of housing do you live in?", "ar": "ما نوع السكن الذي تعيش فيه؟", "tr": "Ne tür bir konutta yaşıyorsunuz?", "de": "In welcher Unterkunft wohnen Sie?"},
+      "explanation_text": {"en": "Select the type that best describes your living situation.", "ar": "اختر النوع الذي يصف وضع سكنك.", "tr": "Yaşam durumunuzu en iyi tanımlayan seçeneği seçin.", "de": "Wählen Sie Ihre Wohnsituation."},
+      "validation_rules": [
+        {"rule_type": "required", "rule_value": null, "error_message": {"en": "Housing type is required.", "ar": "نوع السكن مطلوب.", "tr": "Konut türü gereklidir.", "de": "Unterkunftsart erforderlich."}}
+      ]
+    },
+    {
+      "id": "q_cold_rent", "field_key": "cold_rent", "order_index": 12, "input_type": "text",
+      "condition": {"type": "field_in", "field_key": "housing_type", "values": ["renting", "subletting"]},
+      "options": null,
+      "question_text": {"en": "What is your monthly cold rent (Kaltmiete) in euros?", "ar": "ما هو الإيجار الأساسي الشهري (Kaltmiete) باليورو؟", "tr": "Aylık kira (Kaltmiete) ne kadar euro?", "de": "Wie hoch ist Ihre monatliche Kaltmiete in Euro?"},
+      "explanation_text": {"en": "The cold rent is the base rent without heating or other costs. Write numbers only. Example: 650", "ar": "الإيجار الأساسي بدون تكاليف التدفئة أو غيرها. أرقام فقط. مثال: 650", "tr": "Kira, ısıtma veya diğer maliyetler hariç temel kira. Sadece rakamlar. Örnek: 650", "de": "Die Kaltmiete ist die Miete ohne Heizung. Nur Zahlen. Beispiel: 650"},
+      "validation_rules": [
+        {"rule_type": "regex", "rule_value": "^\\d+(\\.\\d{1,2})?$", "error_message": {"en": "Enter a valid amount (numbers only).", "ar": "أدخل مبلغاً صحيحاً (أرقام فقط).", "tr": "Geçerli bir miktar girin (yalnızca rakamlar).", "de": "Gültigen Betrag eingeben (nur Zahlen)."}}
+      ]
+    },
+    {
+      "id": "q_utilities", "field_key": "utilities", "order_index": 13, "input_type": "text",
+      "condition": {"type": "field_in", "field_key": "housing_type", "values": ["renting", "subletting"]},
+      "options": null,
+      "question_text": {"en": "What are your monthly utility costs (Betriebskosten) in euros?", "ar": "ما هي تكاليف الخدمات الشهرية (Betriebskosten) باليورو؟", "tr": "Aylık işletme giderleri (Betriebskosten) ne kadar euro?", "de": "Wie hoch sind Ihre monatlichen Betriebskosten in Euro?"},
+      "explanation_text": {"en": "These are costs for water, garbage, building maintenance — shown on your rental contract as Nebenkosten or Betriebskosten. If you don't know, check your rental contract. Example: 150", "ar": "هذه تكاليف المياه والقمامة وصيانة المبنى — مذكورة في عقد إيجارك كـ Nebenkosten. مثال: 150", "tr": "Su, çöp, bina bakımı gibi giderler — kira sözleşmenizde Nebenkosten olarak gösterilir. Örnek: 150", "de": "Kosten für Wasser, Müll, Hausreinigung (Nebenkosten). Steht im Mietvertrag. Beispiel: 150"},
+      "validation_rules": [
+        {"rule_type": "regex", "rule_value": "^\\d+(\\.\\d{1,2})?$", "error_message": {"en": "Enter a valid amount.", "ar": "أدخل مبلغاً صحيحاً.", "tr": "Geçerli bir miktar girin.", "de": "Gültigen Betrag eingeben."}}
+      ]
+    },
+    {
+      "id": "q_heating_costs", "field_key": "heating_costs", "order_index": 14, "input_type": "text",
+      "condition": {"type": "field_in", "field_key": "housing_type", "values": ["renting", "subletting"]},
+      "options": null,
+      "question_text": {"en": "What are your monthly heating costs (Heizkosten) in euros?", "ar": "ما هي تكاليف التدفئة الشهرية (Heizkosten) باليورو؟", "tr": "Aylık ısıtma giderleri (Heizkosten) ne kadar euro?", "de": "Wie hoch sind Ihre monatlichen Heizkosten in Euro?"},
+      "explanation_text": {"en": "Monthly heating costs. If heating is included in your Betriebskosten, enter 0. Check your rental contract. Example: 80", "ar": "تكاليف التدفئة الشهرية. إذا كانت مشمولة في Betriebskosten، أدخل 0. مثال: 80", "tr": "Aylık ısıtma giderleri. Betriebskosten'a dahilse 0 girin. Örnek: 80", "de": "Monatliche Heizkosten. Falls in Betriebskosten enthalten, 0 eingeben. Beispiel: 80"},
+      "validation_rules": [
+        {"rule_type": "regex", "rule_value": "^\\d+(\\.\\d{1,2})?$", "error_message": {"en": "Enter a valid amount.", "ar": "أدخل مبلغاً صحيحاً.", "tr": "Geçerli bir miktar girin.", "de": "Gültigen Betrag eingeben."}}
+      ]
+    },
+    {
+      "id": "q_employment_status", "field_key": "employment_status", "order_index": 15, "input_type": "select", "condition": null,
+      "options": [
+        {"value": "unemployed", "label": {"en": "Unemployed — not working, looking for a job", "ar": "عاطل عن العمل — لا يعمل، يبحث عن عمل", "tr": "İşsiz — çalışmıyor, iş arıyor", "de": "Arbeitslos — nicht erwerbstätig, arbeitssuchend"}},
+        {"value": "part_time", "label": {"en": "Part-time employed (Minijob or part-time)", "ar": "عمل جزئي (Minijob أو دوام جزئي)", "tr": "Yarı zamanlı çalışan (Minijob veya part-time)", "de": "Teilzeitbeschäftigt (Minijob oder Teilzeit)"}},
+        {"value": "self_employed", "label": {"en": "Self-employed / freelance", "ar": "عمل حر / مستقل", "tr": "Serbest meslek / freelance", "de": "Selbstständig / freiberuflich"}},
+        {"value": "not_working", "label": {"en": "Not working for other reason (caregiver, student, illness)", "ar": "لا يعمل لسبب آخر (مقدم رعاية، طالب، مرض)", "tr": "Başka nedenle çalışmıyor (bakıcı, öğrenci, hastalık)", "de": "Nicht erwerbstätig aus anderem Grund"}}
+      ],
+      "question_text": {"en": "What is your current employment situation?", "ar": "ما هو وضعك الوظيفي الحالي؟", "tr": "Mevcut istihdam durumunuz nedir?", "de": "Was ist Ihre aktuelle Beschäftigungssituation?"},
+      "explanation_text": {"en": "Select what best describes your current work situation.", "ar": "اختر ما يصف وضعك الوظيفي الحالي.", "tr": "Mevcut çalışma durumunuzu en iyi tanımlayan seçeneği seçin.", "de": "Wählen Sie Ihre aktuelle Beschäftigungssituation."},
+      "validation_rules": [
+        {"rule_type": "required", "rule_value": null, "error_message": {"en": "Employment status is required.", "ar": "الوضع الوظيفي مطلوب.", "tr": "İstihdam durumu gereklidir.", "de": "Beschäftigungsstatus erforderlich."}}
+      ]
+    },
+    {
+      "id": "q_employer_name", "field_key": "employer_name", "order_index": 16, "input_type": "text",
+      "condition": {"type": "field_in", "field_key": "employment_status", "values": ["part_time", "self_employed"]},
+      "options": null,
+      "question_text": {"en": "What is the name of your employer or your business?", "ar": "ما هو اسم صاحب العمل أو نشاطك التجاري؟", "tr": "İşvereninizin veya işletmenizin adı nedir?", "de": "Wie heißt Ihr Arbeitgeber oder Ihr Unternehmen?"},
+      "explanation_text": {"en": "Write the full name of the company or person you work for. For self-employed, write your business name.", "ar": "اكتب الاسم الكامل للشركة أو الشخص الذي تعمل لديه.", "tr": "Çalıştığınız şirketin veya kişinin tam adını yazın.", "de": "Schreiben Sie den vollen Namen des Arbeitgebers."},
+      "validation_rules": []
+    },
+    {
+      "id": "q_employment_start_date", "field_key": "employment_start_date", "order_index": 17, "input_type": "date",
+      "condition": {"type": "field_in", "field_key": "employment_status", "values": ["part_time", "self_employed"]},
+      "options": null,
+      "question_text": {"en": "When did you start this job?", "ar": "متى بدأت هذا العمل؟", "tr": "Bu işe ne zaman başladınız?", "de": "Wann haben Sie diese Tätigkeit begonnen?"},
+      "explanation_text": {"en": "The date you started your current job. Example: 01.01.2024", "ar": "تاريخ بدء عملك الحالي. مثال: 01.01.2024", "tr": "Mevcut işinize başlama tarihi. Örnek: 01.01.2024", "de": "Beginn Ihrer aktuellen Tätigkeit. Beispiel: 01.01.2024"},
+      "validation_rules": []
+    },
+    {
+      "id": "q_weekly_hours", "field_key": "weekly_hours", "order_index": 18, "input_type": "text",
+      "condition": {"type": "field_equals", "field_key": "employment_status", "value": "part_time"},
+      "options": null,
+      "question_text": {"en": "How many hours per week do you work?", "ar": "كم ساعة في الأسبوع تعمل؟", "tr": "Haftada kaç saat çalışıyorsunuz?", "de": "Wie viele Stunden pro Woche arbeiten Sie?"},
+      "explanation_text": {"en": "Write the number of hours per week. Example: 20", "ar": "اكتب عدد ساعات العمل في الأسبوع. مثال: 20", "tr": "Haftalık saat sayısını yazın. Örnek: 20", "de": "Wochenstundenzahl eingeben. Beispiel: 20"},
+      "validation_rules": [
+        {"rule_type": "regex", "rule_value": "^\\d+$", "error_message": {"en": "Enter a whole number.", "ar": "أدخل عدداً صحيحاً.", "tr": "Tam sayı girin.", "de": "Ganze Zahl eingeben."}}
+      ]
+    },
+    {
+      "id": "q_monthly_income", "field_key": "monthly_income", "order_index": 19, "input_type": "text",
       "condition": {"type": "field_not_equals", "field_key": "employment_status", "value": "unemployed"},
-      "question_text": {
-        "en": "What is your approximate monthly income (in euros)?",
-        "ar": "ما هو دخلك الشهري التقريبي (باليورو)؟",
-        "tr": "Yaklaşık aylık geliriniz nedir (Euro cinsinden)?",
-        "de": "Wie hoch ist Ihr ungefähres monatliches Einkommen (in Euro)?"
-      },
-      "explanation_text": {
-        "en": "Enter the amount you earn each month before taxes. Numbers only. Example: 800 or 1250.50",
-        "ar": "أدخل المبلغ الذي تكسبه كل شهر قبل الضرائب. أرقام فقط. مثال: 800 أو 1250.50",
-        "tr": "Her ay vergi öncesi kazandığınız miktarı girin. Yalnızca rakamlar. Örnek: 800 veya 1250.50",
-        "de": "Geben Sie den Betrag ein, den Sie monatlich vor Steuern verdienen. Nur Zahlen. Beispiel: 800 oder 1250,50"
-      },
       "options": null,
+      "question_text": {"en": "What is your approximate monthly net income (in euros)?", "ar": "ما هو صافي دخلك الشهري التقريبي (باليورو)؟", "tr": "Yaklaşık aylık net geliriniz ne kadar (euro)?", "de": "Wie hoch ist Ihr monatliches Nettoeinkommen in Euro?"},
+      "explanation_text": {"en": "Net income = what you receive after taxes. Numbers only. Example: 800", "ar": "صافي الدخل = ما تتلقاه بعد الضرائب. أرقام فقط. مثال: 800", "tr": "Net gelir = vergilerden sonra aldığınız miktar. Yalnızca rakamlar. Örnek: 800", "de": "Nettolohn nach Steuern. Nur Zahlen. Beispiel: 800"},
       "validation_rules": [
-        {
-          "rule_type": "regex",
-          "rule_value": "^\\d+(\\.\\d{1,2})?$",
-          "error_message": {"en": "Please enter a valid amount (numbers only, e.g. 800 or 800.50).", "ar": "يرجى إدخال مبلغ صحيح (أرقام فقط، مثال: 800 أو 800.50).", "tr": "Lütfen geçerli bir miktar girin (yalnızca rakamlar, örn. 800 veya 800.50).", "de": "Bitte geben Sie einen gültigen Betrag ein (nur Zahlen, z.B. 800 oder 800,50)."}
-        }
+        {"rule_type": "regex", "rule_value": "^\\d+(\\.\\d{1,2})?$", "error_message": {"en": "Enter a valid amount.", "ar": "أدخل مبلغاً صحيحاً.", "tr": "Geçerli miktar girin.", "de": "Gültigen Betrag eingeben."}}
       ]
     },
     {
-      "id": "q_has_partner",
-      "field_key": "has_partner",
-      "order_index": 10,
-      "input_type": "yes_no",
-      "condition": null,
-      "question_text": {
-        "en": "Do you have a spouse or registered life partner living with you?",
-        "ar": "هل لديك زوج/ة أو شريك/ة حياة معترف به/ا يعيش/تعيش معك في نفس المنزل؟",
-        "tr": "Sizinle birlikte yaşayan bir eşiniz veya kayıtlı hayat ortağınız var mı?",
-        "de": "Haben Sie einen Ehegatten oder eingetragenen Lebenspartner, der mit Ihnen zusammenlebt?"
-      },
-      "explanation_text": {
-        "en": "Answer Yes if you live with a spouse or registered partner in the same household. Answer No if you live alone or with other family members only.",
-        "ar": "أجب بنعم إذا كنت تعيش مع زوج/ة أو شريك/ة مسجّل/ة في نفس المنزل. أجب بلا إذا كنت تعيش وحدك أو مع أفراد عائلة آخرين فقط.",
-        "tr": "Aynı hanede bir eş veya kayıtlı ortakla yaşıyorsanız Evet deyin. Yalnız veya yalnızca diğer aile üyeleriyle yaşıyorsanız Hayır deyin.",
-        "de": "Antworten Sie Ja, wenn Sie mit einem Ehe- oder Lebenspartner im selben Haushalt leben. Antworten Sie Nein, wenn Sie allein oder nur mit anderen Familienmitgliedern wohnen."
-      },
-      "options": null,
+      "id": "q_receives_kindergeld", "field_key": "receives_kindergeld", "order_index": 20, "input_type": "yes_no", "condition": null, "options": null,
+      "question_text": {"en": "Do you receive Kindergeld (child benefit)?", "ar": "هل تتلقى Kindergeld (إعانة الأطفال)؟", "tr": "Kindergeld (çocuk yardımı) alıyor musunuz?", "de": "Erhalten Sie Kindergeld?"},
+      "explanation_text": {"en": "Kindergeld is a monthly payment for families with children in Germany. If your children receive it or if you receive it for them, answer Yes.", "ar": "Kindergeld هو دفعة شهرية للعائلات التي لديها أطفال في ألمانيا. إذا كنت تتلقاه أو يتلقاه أطفالك، أجب بنعم.", "tr": "Kindergeld, Almanya'da çocuklu aileler için aylık bir ödemedir. Siz veya çocuklarınız alıyorsa Evet deyin.", "de": "Kindergeld ist eine monatliche Zahlung für Familien mit Kindern. Falls Sie es erhalten, Ja angeben."},
       "validation_rules": [
-        {
-          "rule_type": "required",
-          "rule_value": null,
-          "error_message": {"en": "Please answer yes or no.", "ar": "يرجى الإجابة بنعم أو لا.", "tr": "Lütfen evet veya hayır olarak cevaplayın.", "de": "Bitte antworten Sie mit Ja oder Nein."}
-        }
+        {"rule_type": "required", "rule_value": null, "error_message": {"en": "Please answer yes or no.", "ar": "الرجاء الإجابة بنعم أو لا.", "tr": "Lütfen evet veya hayır cevaplayın.", "de": "Bitte ja oder nein antworten."}}
       ]
     },
     {
-      "id": "q_partner_first_name",
-      "field_key": "partner_first_name",
-      "order_index": 11,
-      "input_type": "text",
+      "id": "q_kindergeld_amount", "field_key": "kindergeld_amount", "order_index": 21, "input_type": "text",
+      "condition": {"type": "field_equals", "field_key": "receives_kindergeld", "value": "yes"},
+      "options": null,
+      "question_text": {"en": "How much Kindergeld do you receive per month (in euros)?", "ar": "كم تتلقى من Kindergeld شهرياً (باليورو)؟", "tr": "Aylık ne kadar Kindergeld alıyorsunuz (euro)?", "de": "Wie viel Kindergeld erhalten Sie monatlich in Euro?"},
+      "explanation_text": {"en": "Write the total monthly Kindergeld amount. Example: 250", "ar": "اكتب إجمالي مبلغ Kindergeld الشهري. مثال: 250", "tr": "Toplam aylık Kindergeld miktarını yazın. Örnek: 250", "de": "Gesamtes monatliches Kindergeld. Beispiel: 250"},
+      "validation_rules": [
+        {"rule_type": "regex", "rule_value": "^\\d+(\\.\\d{1,2})?$", "error_message": {"en": "Enter a valid amount.", "ar": "أدخل مبلغاً صحيحاً.", "tr": "Geçerli miktar girin.", "de": "Gültigen Betrag eingeben."}}
+      ]
+    },
+    {
+      "id": "q_receives_unterhalt", "field_key": "receives_unterhalt", "order_index": 22, "input_type": "yes_no", "condition": null, "options": null,
+      "question_text": {"en": "Do you receive Unterhalt (maintenance / child support payments)?", "ar": "هل تتلقى Unterhalt (نفقة / دعم الأطفال)؟", "tr": "Unterhalt (nafaka / çocuk desteği) alıyor musunuz?", "de": "Erhalten Sie Unterhalt?"},
+      "explanation_text": {"en": "Unterhalt is money paid by an ex-partner for you or your children. Answer Yes if you receive any such payments.", "ar": "Unterhalt هو مال يدفعه شريك سابق لك أو لأطفالك. أجب بنعم إذا كنت تتلقى مثل هذه المدفوعات.", "tr": "Unterhalt, eski bir partner tarafından size veya çocuklarınıza ödenen paradır. Böyle ödemeler alıyorsanız Evet deyin.", "de": "Unterhalt wird von einem Ex-Partner für Sie oder Ihre Kinder gezahlt."},
+      "validation_rules": [
+        {"rule_type": "required", "rule_value": null, "error_message": {"en": "Please answer yes or no.", "ar": "الرجاء الإجابة بنعم أو لا.", "tr": "Lütfen cevaplayın.", "de": "Bitte ja oder nein antworten."}}
+      ]
+    },
+    {
+      "id": "q_unterhalt_amount", "field_key": "unterhalt_amount", "order_index": 23, "input_type": "text",
+      "condition": {"type": "field_equals", "field_key": "receives_unterhalt", "value": "yes"},
+      "options": null,
+      "question_text": {"en": "How much Unterhalt do you receive per month (in euros)?", "ar": "كم تتلقى من النفقة شهرياً (باليورو)؟", "tr": "Aylık ne kadar Unterhalt alıyorsunuz (euro)?", "de": "Wie viel Unterhalt erhalten Sie monatlich in Euro?"},
+      "explanation_text": {"en": "Total monthly Unterhalt amount. Example: 300", "ar": "إجمالي مبلغ النفقة الشهري. مثال: 300", "tr": "Toplam aylık nafaka miktarı. Örnek: 300", "de": "Gesamter monatlicher Unterhalt. Beispiel: 300"},
+      "validation_rules": [
+        {"rule_type": "regex", "rule_value": "^\\d+(\\.\\d{1,2})?$", "error_message": {"en": "Enter a valid amount.", "ar": "أدخل مبلغاً صحيحاً.", "tr": "Geçerli miktar girin.", "de": "Gültigen Betrag eingeben."}}
+      ]
+    },
+    {
+      "id": "q_receives_other_income", "field_key": "receives_other_income", "order_index": 24, "input_type": "yes_no", "condition": null, "options": null,
+      "question_text": {"en": "Do you receive any other regular income? (e.g. pension, Elterngeld, Wohngeld, rental income)", "ar": "هل تتلقى أي دخل منتظم آخر؟ (مثل: معاش، Elterngeld، Wohngeld، دخل الإيجار)", "tr": "Başka düzenli geliriniz var mı? (örn. emeklilik, Elterngeld, Wohngeld, kira geliri)", "de": "Erhalten Sie sonstige regelmäßige Einnahmen? (z.B. Rente, Elterngeld, Wohngeld)"},
+      "explanation_text": {"en": "This includes parental allowance (Elterngeld), housing benefit (Wohngeld), pension, rental income, or any other regular payments.", "ar": "يشمل ذلك بدل الوالدين (Elterngeld)، إعانة السكن (Wohngeld)، المعاش، دخل الإيجار، أو أي مدفوعات منتظمة أخرى.", "tr": "Buna ebeveyn yardımı (Elterngeld), konut yardımı (Wohngeld), emeklilik, kira geliri dahildir.", "de": "Dazu zählen Elterngeld, Wohngeld, Rente, Mieteinnahmen oder sonstige regelmäßige Zahlungen."},
+      "validation_rules": [
+        {"rule_type": "required", "rule_value": null, "error_message": {"en": "Please answer yes or no.", "ar": "الرجاء الإجابة.", "tr": "Lütfen cevaplayın.", "de": "Bitte ja oder nein."}}
+      ]
+    },
+    {
+      "id": "q_other_income_amount", "field_key": "other_income_amount", "order_index": 25, "input_type": "text",
+      "condition": {"type": "field_equals", "field_key": "receives_other_income", "value": "yes"},
+      "options": null,
+      "question_text": {"en": "How much other income do you receive per month in total (in euros)?", "ar": "ما هو إجمالي دخلك الآخر شهرياً (باليورو)؟", "tr": "Diğer aylık gelirinizin toplamı ne kadar (euro)?", "de": "Wie hoch sind Ihre sonstigen monatlichen Einnahmen insgesamt in Euro?"},
+      "explanation_text": {"en": "Add up all other regular income sources and write the total. Example: 300", "ar": "اجمع كل مصادر الدخل الأخرى المنتظمة واكتب المجموع. مثال: 300", "tr": "Diğer tüm düzenli gelir kaynaklarını toplayın. Örnek: 300", "de": "Alle sonstigen Einnahmen zusammenrechnen. Beispiel: 300"},
+      "validation_rules": [
+        {"rule_type": "regex", "rule_value": "^\\d+(\\.\\d{1,2})?$", "error_message": {"en": "Enter a valid amount.", "ar": "أدخل مبلغاً صحيحاً.", "tr": "Geçerli miktar girin.", "de": "Gültigen Betrag eingeben."}}
+      ]
+    },
+    {
+      "id": "q_has_savings", "field_key": "has_savings", "order_index": 26, "input_type": "yes_no", "condition": null, "options": null,
+      "question_text": {"en": "Do you have savings or assets worth more than 750 euros?", "ar": "هل لديك مدخرات أو أصول تزيد قيمتها عن 750 يورو؟", "tr": "750 eurodan fazla birikimin veya varlığınız var mı?", "de": "Haben Sie Ersparnisse oder Vermögen über 750 Euro?"},
+      "explanation_text": {"en": "This includes bank accounts, savings accounts, stocks, or property. The Jobcenter needs to know if you have assets that could cover your living costs. Everyone is allowed to keep up to 750€ as emergency reserve.", "ar": "يشمل ذلك الحسابات البنكية أو حسابات التوفير أو الأسهم أو العقارات. لكل شخص الحق في الاحتفاظ بـ 750 يورو كاحتياطي طارئ.", "tr": "Banka hesapları, tasarruf hesapları, hisseler veya mülkleri kapsar. Her kişi 750 Euro'ya kadar acil rezerv tutabilir.", "de": "Dazu zählen Bankkonten, Sparkonten, Aktien oder Immobilien. Ein Freibetrag von 750 Euro ist erlaubt."},
+      "validation_rules": [
+        {"rule_type": "required", "rule_value": null, "error_message": {"en": "Please answer yes or no.", "ar": "الرجاء الإجابة.", "tr": "Lütfen cevaplayın.", "de": "Bitte ja oder nein."}}
+      ]
+    },
+    {
+      "id": "q_savings_amount", "field_key": "savings_amount", "order_index": 27, "input_type": "text",
+      "condition": {"type": "field_equals", "field_key": "has_savings", "value": "yes"},
+      "options": null,
+      "question_text": {"en": "Approximately how much do you have in savings and assets (in euros)?", "ar": "ما هو المبلغ التقريبي لمدخراتك وأصولك (باليورو)؟", "tr": "Birikimleriniz ve varlıklarınız yaklaşık ne kadar (euro)?", "de": "Wie hoch sind Ihre Ersparnisse und Vermögenswerte in Euro insgesamt?"},
+      "explanation_text": {"en": "Write the total approximate value of all your savings and assets. Example: 2000", "ar": "اكتب القيمة التقريبية الإجمالية لجميع مدخراتك وأصولك. مثال: 2000", "tr": "Tüm birikimlerinizin ve varlıklarınızın toplam yaklaşık değerini yazın. Örnek: 2000", "de": "Gesamten ungefähren Wert aller Ersparnisse angeben. Beispiel: 2000"},
+      "validation_rules": [
+        {"rule_type": "regex", "rule_value": "^\\d+(\\.\\d{1,2})?$", "error_message": {"en": "Enter a valid amount.", "ar": "أدخل مبلغاً صحيحاً.", "tr": "Geçerli miktar girin.", "de": "Gültigen Betrag eingeben."}}
+      ]
+    },
+    {
+      "id": "q_has_partner", "field_key": "has_partner", "order_index": 28, "input_type": "yes_no", "condition": null, "options": null,
+      "question_text": {"en": "Do you have a spouse or registered life partner living with you?", "ar": "هل لديك زوج/ة أو شريك/ة حياة يعيش معك؟", "tr": "Sizinle birlikte yaşayan bir eşiniz veya kayıtlı ortağınız var mı?", "de": "Haben Sie einen Ehegatten oder eingetragenen Lebenspartner?"},
+      "explanation_text": {"en": "Answer Yes if you live together with your spouse or registered partner in the same household.", "ar": "أجب بنعم إذا كنت تعيش مع زوجك/تك أو شريكك/تك في نفس المنزل.", "tr": "Eşiniz veya kayıtlı ortağınızla aynı evde yaşıyorsanız Evet deyin.", "de": "Ja, wenn Sie mit Ihrem Ehe- oder Lebenspartner zusammenleben."},
+      "validation_rules": [
+        {"rule_type": "required", "rule_value": null, "error_message": {"en": "Please answer yes or no.", "ar": "الرجاء الإجابة.", "tr": "Lütfen cevaplayın.", "de": "Bitte ja oder nein."}}
+      ]
+    },
+    {
+      "id": "q_partner_first_name", "field_key": "partner_first_name", "order_index": 29, "input_type": "text",
       "condition": {"type": "field_equals", "field_key": "has_partner", "value": "yes"},
-      "question_text": {
-        "en": "What is your partner's first name?",
-        "ar": "ما هو الاسم الأول لشريكك؟",
-        "tr": "Ortağınızın adı nedir?",
-        "de": "Wie lautet der Vorname Ihres Partners/Ihrer Partnerin?"
-      },
-      "explanation_text": {
-        "en": "Enter your partner's first name as it appears on their official ID.",
-        "ar": "أدخل الاسم الأول لشريكك كما يظهر في بطاقة هويته/ها الرسمية.",
-        "tr": "Ortağınızın adını resmi kimliğinde göründüğü gibi girin.",
-        "de": "Geben Sie den Vornamen Ihres Partners so ein, wie er auf dem offiziellen Ausweis steht."
-      },
       "options": null,
+      "question_text": {"en": "What is your partner's first name?", "ar": "ما هو الاسم الأول لشريكك؟", "tr": "Ortağınızın adı nedir?", "de": "Wie lautet der Vorname Ihres Partners?"},
+      "explanation_text": {"en": "Your partner's first name as on their official ID.", "ar": "الاسم الأول لشريكك كما في بطاقة هويته.", "tr": "Ortağınızın resmi kimliğindeki adı.", "de": "Vorname des Partners wie im Ausweis."},
       "validation_rules": [
-        {
-          "rule_type": "required",
-          "rule_value": null,
-          "error_message": {"en": "Partner's first name is required.", "ar": "الاسم الأول للشريك مطلوب.", "tr": "Ortağın adı gereklidir.", "de": "Vorname des Partners ist erforderlich."}
-        }
+        {"rule_type": "required", "rule_value": null, "error_message": {"en": "Partner's first name is required.", "ar": "اسم الشريك مطلوب.", "tr": "Ortağın adı gereklidir.", "de": "Vorname des Partners erforderlich."}}
       ]
     },
     {
-      "id": "q_partner_last_name",
-      "field_key": "partner_last_name",
-      "order_index": 12,
-      "input_type": "text",
+      "id": "q_partner_last_name", "field_key": "partner_last_name", "order_index": 30, "input_type": "text",
       "condition": {"type": "field_equals", "field_key": "has_partner", "value": "yes"},
-      "question_text": {
-        "en": "What is your partner's family name?",
-        "ar": "ما هو اسم عائلة شريكك؟",
-        "tr": "Ortağınızın soyadı nedir?",
-        "de": "Wie lautet der Familienname Ihres Partners/Ihrer Partnerin?"
-      },
-      "explanation_text": {
-        "en": "Enter your partner's surname as it appears on their official ID.",
-        "ar": "أدخل اسم عائلة شريكك كما يظهر في بطاقة هويته/ها الرسمية.",
-        "tr": "Ortağınızın soyadını resmi kimliğinde göründüğü gibi girin.",
-        "de": "Geben Sie den Nachnamen Ihres Partners so ein, wie er auf dem offiziellen Ausweis steht."
-      },
       "options": null,
+      "question_text": {"en": "What is your partner's family name?", "ar": "ما هو اسم عائلة شريكك؟", "tr": "Ortağınızın soyadı nedir?", "de": "Wie lautet der Familienname Ihres Partners?"},
+      "explanation_text": {"en": "Your partner's family name as on their official ID.", "ar": "اسم عائلة شريكك كما في بطاقة هويته.", "tr": "Ortağınızın resmi kimliğindeki soyadı.", "de": "Familienname des Partners wie im Ausweis."},
       "validation_rules": [
-        {
-          "rule_type": "required",
-          "rule_value": null,
-          "error_message": {"en": "Partner's family name is required.", "ar": "اسم عائلة الشريك مطلوب.", "tr": "Ortağın soyadı gereklidir.", "de": "Familienname des Partners ist erforderlich."}
-        }
+        {"rule_type": "required", "rule_value": null, "error_message": {"en": "Partner's family name is required.", "ar": "اسم عائلة الشريك مطلوب.", "tr": "Ortağın soyadı gereklidir.", "de": "Familienname des Partners erforderlich."}}
       ]
     },
     {
-      "id": "q_children_count",
-      "field_key": "children_count",
-      "order_index": 13,
-      "input_type": "text",
-      "condition": null,
-      "question_text": {
-        "en": "How many children under 18 live in your household?",
-        "ar": "كم عدد الأطفال دون سن 18 الذين يعيشون في منزلك؟",
-        "tr": "Hanenizde 18 yaşın altında kaç çocuk yaşıyor?",
-        "de": "Wie viele Kinder unter 18 Jahren leben in Ihrem Haushalt?"
-      },
-      "explanation_text": {
-        "en": "Count only children who live with you. If you have no children, enter 0.",
-        "ar": "احسب فقط الأطفال الذين يعيشون معك. إذا لم يكن لديك أطفال، أدخل 0.",
-        "tr": "Yalnızca sizinle yaşayan çocukları sayın. Çocuğunuz yoksa 0 girin.",
-        "de": "Zählen Sie nur Kinder, die bei Ihnen wohnen. Falls Sie keine Kinder haben, geben Sie 0 ein."
-      },
-      "options": null,
+      "id": "q_partner_employment_status", "field_key": "partner_employment_status", "order_index": 31, "input_type": "select",
+      "condition": {"type": "field_equals", "field_key": "has_partner", "value": "yes"},
+      "options": [
+        {"value": "unemployed", "label": {"en": "Unemployed", "ar": "عاطل عن العمل", "tr": "İşsiz", "de": "Arbeitslos"}},
+        {"value": "part_time", "label": {"en": "Part-time employed", "ar": "عمل جزئي", "tr": "Yarı zamanlı", "de": "Teilzeitbeschäftigt"}},
+        {"value": "full_time", "label": {"en": "Full-time employed", "ar": "عمل بدوام كامل", "tr": "Tam zamanlı çalışan", "de": "Vollzeitbeschäftigt"}},
+        {"value": "self_employed", "label": {"en": "Self-employed", "ar": "عمل حر", "tr": "Serbest meslek", "de": "Selbstständig"}},
+        {"value": "not_working", "label": {"en": "Not working", "ar": "لا يعمل", "tr": "Çalışmıyor", "de": "Nicht erwerbstätig"}}
+      ],
+      "question_text": {"en": "What is your partner's employment situation?", "ar": "ما هو الوضع الوظيفي لشريكك؟", "tr": "Ortağınızın çalışma durumu nedir?", "de": "Was ist die Beschäftigungssituation Ihres Partners?"},
+      "explanation_text": {"en": "Select the option that best describes your partner's current work situation.", "ar": "اختر ما يصف وضع شريكك الوظيفي.", "tr": "Ortağınızın çalışma durumunu seçin.", "de": "Beschäftigungssituation des Partners auswählen."},
       "validation_rules": [
-        {
-          "rule_type": "required",
-          "rule_value": null,
-          "error_message": {"en": "Please enter the number of children (0 if none).", "ar": "يرجى إدخال عدد الأطفال (0 إذا لم يكن لديك أطفال).", "tr": "Lütfen çocuk sayısını girin (yoksa 0).", "de": "Bitte geben Sie die Anzahl der Kinder ein (0 wenn keine)."}
-        },
-        {
-          "rule_type": "regex",
-          "rule_value": "^\\d+$",
-          "error_message": {"en": "Please enter a whole number (e.g. 0, 1, 2).", "ar": "يرجى إدخال عدد صحيح (مثال: 0، 1، 2).", "tr": "Lütfen tam sayı girin (örn. 0, 1, 2).", "de": "Bitte geben Sie eine ganze Zahl ein (z.B. 0, 1, 2)."}
-        }
+        {"rule_type": "required", "rule_value": null, "error_message": {"en": "Partner's employment status is required.", "ar": "الوضع الوظيفي للشريك مطلوب.", "tr": "Ortağın istihdam durumu gereklidir.", "de": "Beschäftigungsstatus des Partners erforderlich."}}
       ]
     },
     {
-      "id": "q_iban",
-      "field_key": "iban",
-      "order_index": 14,
-      "input_type": "text",
-      "condition": null,
-      "question_text": {
-        "en": "What is your German IBAN (bank account number)?",
-        "ar": "ما هو رقم الـ IBAN الألماني لحسابك البنكي؟",
-        "tr": "Alman IBAN numaranız (banka hesap numarası) nedir?",
-        "de": "Wie lautet Ihre deutsche IBAN (Bankkontonummer)?"
-      },
-      "explanation_text": {
-        "en": "Your IBAN is used for receiving benefit payments. It starts with DE followed by 20 digits. Total: 22 characters. You can find it on your bank card or in your banking app. Example: DE89370400440532013000",
-        "ar": "يُستخدم رقم IBAN لاستقبال مدفوعات الإعانات. يبدأ بـ DE ثم 20 رقماً. الإجمالي: 22 حرفاً. يمكنك العثور عليه على بطاقتك المصرفية أو في تطبيق البنك. مثال: DE89370400440532013000",
-        "tr": "IBAN'ınız sosyal yardım ödemelerini almak için kullanılır. DE ile başlar ve ardından 20 rakam gelir. Toplam: 22 karakter. Banka kartınızda veya bankacılık uygulamanızda bulabilirsiniz. Örnek: DE89370400440532013000",
-        "de": "Ihre IBAN wird für Leistungszahlungen verwendet. Sie beginnt mit DE gefolgt von 20 Ziffern. Insgesamt 22 Zeichen. Beispiel: DE89370400440532013000"
-      },
+      "id": "q_partner_monthly_income", "field_key": "partner_monthly_income", "order_index": 32, "input_type": "text",
+      "condition": {"type": "and", "conditions": [
+        {"type": "field_equals", "field_key": "has_partner", "value": "yes"},
+        {"type": "field_not_equals", "field_key": "partner_employment_status", "value": "unemployed"},
+        {"type": "field_not_equals", "field_key": "partner_employment_status", "value": "not_working"}
+      ]},
       "options": null,
+      "question_text": {"en": "What is your partner's monthly net income (in euros)?", "ar": "ما هو صافي الدخل الشهري لشريكك (باليورو)؟", "tr": "Ortağınızın aylık net geliri ne kadar (euro)?", "de": "Wie hoch ist das monatliche Nettoeinkommen Ihres Partners in Euro?"},
+      "explanation_text": {"en": "Your partner's net income after taxes per month. Example: 1200", "ar": "صافي دخل شريكك بعد الضرائب شهرياً. مثال: 1200", "tr": "Ortağınızın vergi sonrası aylık net geliri. Örnek: 1200", "de": "Nettoeinkommen des Partners nach Steuern. Beispiel: 1200"},
       "validation_rules": [
-        {
-          "rule_type": "required",
-          "rule_value": null,
-          "error_message": {"en": "IBAN is required.", "ar": "رقم IBAN مطلوب.", "tr": "IBAN gereklidir.", "de": "IBAN ist erforderlich."}
-        },
-        {
-          "rule_type": "iban",
-          "rule_value": "DE",
-          "error_message": {"en": "Please enter a valid German IBAN. It must start with DE and be 22 characters long (e.g. DE89370400440532013000).", "ar": "يرجى إدخال رقم IBAN ألماني صحيح. يجب أن يبدأ بـ DE ويكون 22 حرفاً (مثال: DE89370400440532013000).", "tr": "Lütfen geçerli bir Alman IBAN'ı girin. DE ile başlamalı ve 22 karakter uzunluğunda olmalıdır (örn. DE89370400440532013000).", "de": "Bitte geben Sie eine gültige deutsche IBAN ein. Sie muss mit DE beginnen und 22 Zeichen lang sein (z.B. DE89370400440532013000)."}
-        }
+        {"rule_type": "regex", "rule_value": "^\\d+(\\.\\d{1,2})?$", "error_message": {"en": "Enter a valid amount.", "ar": "أدخل مبلغاً صحيحاً.", "tr": "Geçerli miktar girin.", "de": "Gültigen Betrag eingeben."}}
       ]
     },
     {
-      "id": "q_signature_date",
-      "field_key": "signature_date",
-      "order_index": 15,
-      "input_type": "date",
-      "condition": null,
-      "question_text": {
-        "en": "What is today's date? (Date of signing the form)",
-        "ar": "ما هو تاريخ اليوم؟ (تاريخ التوقيع على الاستمارة)",
-        "tr": "Bugünün tarihi nedir? (Formu imzalama tarihi)",
-        "de": "Was ist das heutige Datum? (Datum der Unterzeichnung)"
-      },
-      "explanation_text": {
-        "en": "Enter today's date. This will be used as the signing date on the form.",
-        "ar": "أدخل تاريخ اليوم. سيُستخدم هذا كتاريخ التوقيع على الاستمارة.",
-        "tr": "Bugünün tarihini girin. Bu, formdaki imza tarihi olarak kullanılacaktır.",
-        "de": "Geben Sie das heutige Datum ein. Es wird als Unterschriftsdatum auf dem Formular verwendet."
-      },
-      "options": null,
+      "id": "q_children_count", "field_key": "children_count", "order_index": 33, "input_type": "text", "condition": null, "options": null,
+      "question_text": {"en": "How many children under 25 live in your household?", "ar": "كم عدد الأطفال دون سن 25 الذين يعيشون في منزلك؟", "tr": "Hanenizde 25 yaşın altında kaç çocuk yaşıyor?", "de": "Wie viele Kinder unter 25 Jahren leben in Ihrem Haushalt?"},
+      "explanation_text": {"en": "Count children under 25 who live with you. This includes biological children, stepchildren, and foster children. If none, enter 0.", "ar": "احسب الأطفال دون 25 سنة الذين يعيشون معك. يشمل الأطفال البيولوجيين والمتبنين. إذا لم يكن هناك أطفال، أدخل 0.", "tr": "Sizinle yaşayan 25 yaşın altındaki çocukları sayın. Yoksa 0 girin.", "de": "Kinder unter 25 im Haushalt zählen. Falls keine, 0 eingeben."},
       "validation_rules": [
-        {
-          "rule_type": "required",
-          "rule_value": null,
-          "error_message": {"en": "Signing date is required.", "ar": "تاريخ التوقيع مطلوب.", "tr": "İmza tarihi gereklidir.", "de": "Datum ist erforderlich."}
-        }
+        {"rule_type": "required", "rule_value": null, "error_message": {"en": "Please enter the number of children.", "ar": "أدخل عدد الأطفال.", "tr": "Çocuk sayısını girin.", "de": "Anzahl der Kinder angeben."}},
+        {"rule_type": "regex", "rule_value": "^\\d+$", "error_message": {"en": "Enter a whole number.", "ar": "أدخل عدداً صحيحاً.", "tr": "Tam sayı girin.", "de": "Ganze Zahl eingeben."}}
+      ]
+    },
+    {
+      "id": "q_child1_first_name", "field_key": "child1_first_name", "order_index": 34, "input_type": "text",
+      "condition": {"type": "field_not_equals", "field_key": "children_count", "value": "0"},
+      "options": null,
+      "question_text": {"en": "What is the first name of your first child?", "ar": "ما هو الاسم الأول لطفلك الأول؟", "tr": "İlk çocuğunuzun adı nedir?", "de": "Wie lautet der Vorname Ihres ersten Kindes?"},
+      "explanation_text": {"en": "Enter your first child's first name.", "ar": "أدخل الاسم الأول لطفلك الأول.", "tr": "İlk çocuğunuzun adını girin.", "de": "Vornamen des ersten Kindes eingeben."},
+      "validation_rules": [
+        {"rule_type": "required", "rule_value": null, "error_message": {"en": "Child's name is required.", "ar": "اسم الطفل مطلوب.", "tr": "Çocuğun adı gereklidir.", "de": "Name des Kindes erforderlich."}}
+      ]
+    },
+    {
+      "id": "q_child1_date_of_birth", "field_key": "child1_date_of_birth", "order_index": 35, "input_type": "date",
+      "condition": {"type": "field_not_equals", "field_key": "children_count", "value": "0"},
+      "options": null,
+      "question_text": {"en": "What is your first child's date of birth?", "ar": "ما هو تاريخ ميلاد طفلك الأول؟", "tr": "İlk çocuğunuzun doğum tarihi nedir?", "de": "Was ist das Geburtsdatum Ihres ersten Kindes?"},
+      "explanation_text": {"en": "Enter your first child's date of birth. Format: DD.MM.YYYY. Example: 05.08.2018", "ar": "أدخل تاريخ ميلاد طفلك الأول. الصيغة: يوم.شهر.سنة. مثال: 05.08.2018", "tr": "İlk çocuğunuzun doğum tarihini girin. Format: GG.AA.YYYY. Örnek: 05.08.2018", "de": "Geburtsdatum des ersten Kindes eingeben. Format: TT.MM.JJJJ."},
+      "validation_rules": [
+        {"rule_type": "required", "rule_value": null, "error_message": {"en": "Child's date of birth is required.", "ar": "تاريخ ميلاد الطفل مطلوب.", "tr": "Çocuğun doğum tarihi gereklidir.", "de": "Geburtsdatum des Kindes erforderlich."}}
+      ]
+    },
+    {
+      "id": "q_iban", "field_key": "iban", "order_index": 36, "input_type": "text", "condition": null, "options": null,
+      "question_text": {"en": "What is your German IBAN (bank account number)?", "ar": "ما هو رقم IBAN الألماني لحسابك البنكي؟", "tr": "Alman IBAN numaranız nedir?", "de": "Wie lautet Ihre deutsche IBAN?"},
+      "explanation_text": {"en": "Your IBAN is used for benefit payments. Starts with DE, 22 characters total. Find it in your banking app or on your bank card. Example: DE89370400440532013000", "ar": "يُستخدم IBAN لمدفوعات الإعانات. يبدأ بـ DE، 22 حرفاً. ابحث عنه في تطبيق البنك. مثال: DE89370400440532013000", "tr": "IBAN, yardım ödemeleri için kullanılır. DE ile başlar, toplam 22 karakter. Bankacılık uygulamanızda bulabilirsiniz.", "de": "Ihre IBAN wird für Zahlungen verwendet. Beginnt mit DE, 22 Zeichen. Beispiel: DE89370400440532013000"},
+      "validation_rules": [
+        {"rule_type": "required", "rule_value": null, "error_message": {"en": "IBAN is required.", "ar": "رقم IBAN مطلوب.", "tr": "IBAN gereklidir.", "de": "IBAN erforderlich."}},
+        {"rule_type": "iban", "rule_value": "DE", "error_message": {"en": "Please enter a valid German IBAN (starts with DE, 22 characters).", "ar": "أدخل IBAN ألمانياً صحيحاً (يبدأ بـ DE، 22 حرفاً).", "tr": "Geçerli bir Alman IBAN'ı girin (DE ile başlar, 22 karakter).", "de": "Gültige deutsche IBAN eingeben (beginnt mit DE, 22 Zeichen)."}}
+      ]
+    },
+    {
+      "id": "q_bank_name", "field_key": "bank_name", "order_index": 37, "input_type": "text", "condition": null, "options": null,
+      "question_text": {"en": "What is the name of your bank?", "ar": "ما هو اسم بنكك؟", "tr": "Bankanızın adı nedir?", "de": "Wie heißt Ihre Bank?"},
+      "explanation_text": {"en": "Write the name of your bank. Example: Sparkasse Berlin, Deutsche Bank, Commerzbank", "ar": "اكتب اسم بنكك. مثال: Sparkasse Berlin، Deutsche Bank، Commerzbank", "tr": "Bankanızın adını yazın. Örnek: Sparkasse Berlin, Deutsche Bank", "de": "Name Ihrer Bank. Beispiel: Sparkasse Berlin, Deutsche Bank"},
+      "validation_rules": []
+    },
+    {
+      "id": "q_signature_date", "field_key": "signature_date", "order_index": 38, "input_type": "date", "condition": null, "options": null,
+      "question_text": {"en": "What is today's date? (Signing date)", "ar": "ما هو تاريخ اليوم؟ (تاريخ التوقيع)", "tr": "Bugünün tarihi nedir? (İmza tarihi)", "de": "Was ist das heutige Datum? (Unterschriftsdatum)"},
+      "explanation_text": {"en": "This will be used as the date you sign the form.", "ar": "سيُستخدم هذا كتاريخ توقيعك على الاستمارة.", "tr": "Bu, formu imzaladığınız tarih olarak kullanılacak.", "de": "Dies wird als Datum der Unterschrift verwendet."},
+      "validation_rules": [
+        {"rule_type": "required", "rule_value": null, "error_message": {"en": "Signing date is required.", "ar": "تاريخ التوقيع مطلوب.", "tr": "İmza tarihi gereklidir.", "de": "Datum erforderlich."}}
       ]
     }
   ]

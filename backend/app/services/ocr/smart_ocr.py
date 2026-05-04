@@ -36,26 +36,68 @@ from app.services.ocr.base import OCRService, OCRResult
 # ── Pydantic schema — defines the exact output shape ──────────────────────────
 
 class ExtractedFormFields(BaseModel):
+    # Personal info
     first_name: Optional[str] = Field(None, description="Vorname as written")
     last_name: Optional[str] = Field(None, description="Familienname as written")
     date_of_birth: Optional[str] = Field(None, description="Geburtsdatum in DD.MM.YYYY")
+    birth_place: Optional[str] = Field(None, description="Geburtsort")
     nationality: Optional[str] = Field(None, description="Staatsangehörigkeit")
+    marital_status: Optional[str] = Field(
+        None,
+        description="One of: single, married, separated, divorced, widowed, partnership"
+    )
+    phone: Optional[str] = Field(None, description="Telefonnummer")
+    # Address
     street_address: Optional[str] = Field(None, description="Straße und Hausnummer")
     postal_code: Optional[str] = Field(None, description="Postleitzahl, 5 digits")
     city: Optional[str] = Field(None, description="Ort / Stadt")
+    # Housing
+    housing_type: Optional[str] = Field(
+        None,
+        description="One of: renting, subletting, owner, living_with_parents, other"
+    )
+    cold_rent: Optional[str] = Field(None, description="Kaltmiete monthly amount as numeric string")
+    utilities: Optional[str] = Field(None, description="Nebenkosten monthly amount as numeric string")
+    heating_costs: Optional[str] = Field(None, description="Heizkosten monthly amount as numeric string")
+    # Employment
     employment_status: Optional[str] = Field(
         None,
         description="One of: unemployed, part_time, self_employed, not_working"
     )
+    employer_name: Optional[str] = Field(None, description="Name des Arbeitgebers")
+    employment_start_date: Optional[str] = Field(None, description="Beschäftigt seit DD.MM.YYYY")
+    weekly_hours: Optional[str] = Field(None, description="Wochenstunden as numeric string")
+    # Income
     monthly_income: Optional[str] = Field(None, description="Monthly income as numeric string")
+    receives_kindergeld: Optional[str] = Field(None, description="yes or no")
+    kindergeld_amount: Optional[str] = Field(None, description="Kindergeld monthly amount as numeric string")
+    receives_unterhalt: Optional[str] = Field(None, description="yes or no")
+    unterhalt_amount: Optional[str] = Field(None, description="Unterhalt monthly amount as numeric string")
+    receives_other_income: Optional[str] = Field(None, description="yes or no")
+    other_income_amount: Optional[str] = Field(None, description="Other income monthly amount as numeric string")
+    # Assets
+    has_savings: Optional[str] = Field(None, description="yes or no")
+    savings_amount: Optional[str] = Field(None, description="Savings total amount as numeric string")
+    # Partner
     has_partner: Optional[str] = Field(None, description="yes or no")
     partner_first_name: Optional[str] = Field(None, description="Partner Vorname")
     partner_last_name: Optional[str] = Field(None, description="Partner Familienname")
+    partner_employment_status: Optional[str] = Field(
+        None,
+        description="One of: unemployed, part_time, self_employed, not_working"
+    )
+    partner_monthly_income: Optional[str] = Field(None, description="Partner monthly income as numeric string")
+    # Children
     children_count: Optional[str] = Field(None, description="Number of children as string")
+    child1_first_name: Optional[str] = Field(None, description="First child Vorname")
+    child1_date_of_birth: Optional[str] = Field(None, description="First child Geburtsdatum in DD.MM.YYYY")
+    # Bank
     iban: Optional[str] = Field(None, description="German IBAN without spaces, starts DE")
+    bank_name: Optional[str] = Field(None, description="Name des Kreditinstituts")
+    # Signature
     signature_date: Optional[str] = Field(None, description="Signing date in DD.MM.YYYY")
 
-    @field_validator("date_of_birth", "signature_date", mode="before")
+    @field_validator("date_of_birth", "signature_date", "employment_start_date", "child1_date_of_birth", mode="before")
     @classmethod
     def normalize_date(cls, v):
         if not v:
@@ -85,7 +127,11 @@ class ExtractedFormFields(BaseModel):
         digits = re.sub(r"\D", "", str(v))
         return digits if len(digits) == 5 else None
 
-    @field_validator("has_partner", mode="before")
+    @field_validator(
+        "has_partner", "receives_kindergeld", "receives_unterhalt",
+        "receives_other_income", "has_savings",
+        mode="before"
+    )
     @classmethod
     def normalize_boolean(cls, v):
         if not v:
@@ -97,7 +143,7 @@ class ExtractedFormFields(BaseModel):
             return "no"
         return None
 
-    @field_validator("employment_status", mode="before")
+    @field_validator("employment_status", "partner_employment_status", mode="before")
     @classmethod
     def normalize_employment(cls, v):
         if not v:
@@ -115,7 +161,32 @@ class ExtractedFormFields(BaseModel):
             return v
         return None
 
-    @field_validator("monthly_income", "children_count", mode="before")
+    @field_validator("marital_status", mode="before")
+    @classmethod
+    def normalize_marital(cls, v):
+        if not v:
+            return None
+        v = str(v).lower().strip()
+        if any(w in v for w in ("ledig", "single", "unverheiratet")):
+            return "single"
+        if any(w in v for w in ("verheiratet", "married")):
+            return "married"
+        if any(w in v for w in ("getrennt", "separated")):
+            return "separated"
+        if any(w in v for w in ("geschieden", "divorced")):
+            return "divorced"
+        if any(w in v for w in ("verwitwet", "widowed")):
+            return "widowed"
+        if any(w in v for w in ("partnerschaft", "partnership", "lebenspartner")):
+            return "partnership"
+        return None
+
+    @field_validator(
+        "monthly_income", "children_count", "cold_rent", "utilities",
+        "heating_costs", "weekly_hours", "kindergeld_amount", "unterhalt_amount",
+        "other_income_amount", "savings_amount", "partner_monthly_income",
+        mode="before"
+    )
     @classmethod
     def normalize_numeric(cls, v):
         if not v:
@@ -133,10 +204,19 @@ class FormExtractionResult(BaseModel):
 # ── Prompts ────────────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = (
-    "You are an expert at extracting structured data from German government forms. "
-    "Extract ALL visible field values from the provided Jobcenter ALG II form. "
-    "Only include values that are clearly filled in. Return null for empty fields. "
-    "For checkboxes, determine the value from which box is checked or marked."
+    "You are an expert at extracting structured data from German government forms (Jobcenter ALG II Antrag). "
+    "Extract ALL visible filled-in values from the form. "
+    "Fields to extract: personal data (Vorname, Familienname, Geburtsdatum DD.MM.YYYY, Geburtsort, "
+    "Staatsangehörigkeit, Familienstand, Telefon), address (Straße, PLZ, Ort), "
+    "housing (Unterkunftsart: renting/subletting/owner/living_with_parents/other, Kaltmiete, Nebenkosten, Heizkosten), "
+    "employment (status: unemployed/part_time/self_employed/not_working, Arbeitgeber, start date, Wochenstunden), "
+    "income (monthly amount, Kindergeld yes/no + amount, Unterhalt yes/no + amount, other income yes/no + amount), "
+    "assets (Ersparnisse yes/no + amount), "
+    "partner (vorhanden yes/no, Vorname, Familienname, employment status, monthly income), "
+    "children (count, first child name and birthdate), "
+    "bank (IBAN starts DE, Kreditinstitut name), signature date. "
+    "Only include values clearly filled in. Return null for blank fields. "
+    "For checkboxes: return 'yes' if checked, 'no' if unchecked/blank."
 )
 
 TEXT_PROMPT = (

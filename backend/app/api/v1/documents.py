@@ -134,4 +134,5 @@ async def upload_document(
         detected_form_type=detected_type,
         confidence=ocr_result.confidence,
         requires_manual_selection=(not detected_type or ocr_result.confidence < 0.7),
+        prefilled_fields=prefilled_count,
     )
