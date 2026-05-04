@@ -10,7 +10,10 @@ class OCRServiceFactory:
         if backend == "gemini":
             from app.services.ocr.gemini_ocr import GeminiOCRService
             return GeminiOCRService()
+        if backend == "groq":
+            from app.services.ocr.groq_ocr import GroqOCRService
+            return GroqOCRService()
         if backend == "claude":
             from app.services.ocr.claude_ocr import ClaudeOCRService
             return ClaudeOCRService()
-        raise ValueError(f"Unknown OCR backend: {backend!r}. Supported: mock, gemini, claude")
+        raise ValueError(f"Unknown OCR backend: {backend!r}. Supported: mock, gemini, groq, claude")
