@@ -7,13 +7,17 @@ class OCRServiceFactory:
     def create(backend: str) -> OCRService:
         if backend == "mock":
             return MockOCRService()
+        if backend in ("smart", "groq"):
+            # "smart" = full pipeline: pdfplumber + PyMuPDF + LangChain + instructor + Groq
+            from app.services.ocr.smart_ocr import SmartOCRService
+            return SmartOCRService()
         if backend == "gemini":
             from app.services.ocr.gemini_ocr import GeminiOCRService
             return GeminiOCRService()
-        if backend == "groq":
-            from app.services.ocr.groq_ocr import GroqOCRService
-            return GroqOCRService()
         if backend == "claude":
             from app.services.ocr.claude_ocr import ClaudeOCRService
             return ClaudeOCRService()
-        raise ValueError(f"Unknown OCR backend: {backend!r}. Supported: mock, gemini, groq, claude")
+        raise ValueError(
+            f"Unknown OCR backend: {backend!r}. "
+            "Supported: mock, smart (or groq), gemini, claude"
+        )
