@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Header } from "@/components/layout/Header";
 import { StepProgress } from "@/components/layout/StepProgress";
@@ -12,10 +13,10 @@ const T: Record<string, Record<string, string>> = {
   download: { en: "Download PDF", ar: "تنزيل PDF", tr: "PDF İndir", de: "PDF herunterladen" },
   start_new: { en: "Start a new form", ar: "ابدأ استمارة جديدة", tr: "Yeni form başlat", de: "Neues Formular starten" },
   disclaimer: {
-    en: "⚠️ This is a form completion tool only. We provide no legal advice. Please verify all information before submitting to the Jobcenter. You remain responsible for the accuracy of your submission.",
-    ar: "⚠️ هذه أداة لمساعدتك في تعبئة الاستمارات فقط. لا نقدم أي استشارات قانونية. يرجى التحقق من جميع المعلومات قبل تقديمها إلى مركز التشغيل. أنت المسؤول عن دقة المعلومات المقدمة.",
-    tr: "⚠️ Bu yalnızca bir form doldurma aracıdır. Hukuki tavsiye vermiyoruz. Lütfen Jobcenter'a göndermeden önce tüm bilgileri doğrulayın. Başvurunuzun doğruluğundan siz sorumlusunuz.",
-    de: "⚠️ Dies ist nur ein Formular-Ausfüllhilfe. Wir geben keine Rechtsberatung. Bitte überprüfen Sie alle Angaben, bevor Sie sie beim Jobcenter einreichen. Sie sind für die Richtigkeit Ihrer Angaben verantwortlich.",
+    en: "⚠️ This is a form completion tool only. We provide no legal advice. Please verify all information before submitting to the Jobcenter.",
+    ar: "⚠️ هذه أداة لمساعدتك في تعبئة الاستمارات فقط. لا نقدم أي استشارات قانونية. يرجى التحقق من جميع المعلومات قبل تقديمها.",
+    tr: "⚠️ Bu yalnızca bir form doldurma aracıdır. Hukuki tavsiye vermiyoruz. Lütfen Jobcenter'a göndermeden önce tüm bilgileri doğrulayın.",
+    de: "⚠️ Dies ist nur ein Formular-Ausfüllhilfe. Wir geben keine Rechtsberatung. Bitte überprüfen Sie alle Angaben vor der Einreichung.",
   },
 };
 
@@ -27,6 +28,15 @@ export default function DownloadPage({ params }: { params: { locale: string } })
   const { locale } = params;
   const router = useRouter();
   const { caseId, pdfId, reset } = useCaseStore();
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => { setMounted(true); }, []);
+
+  useEffect(() => {
+    if (mounted && (!caseId || !pdfId)) {
+      router.replace("/");
+    }
+  }, [mounted, caseId, pdfId, router]);
 
   function handleDownload() {
     if (!caseId || !pdfId) return;
@@ -39,10 +49,8 @@ export default function DownloadPage({ params }: { params: { locale: string } })
     router.push("/");
   }
 
-  if (!caseId || !pdfId) {
-    if (typeof window !== "undefined") router.replace("/");
-    return null;
-  }
+  if (!mounted) return null;
+  if (!caseId || !pdfId) return null;
 
   return (
     <>

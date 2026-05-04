@@ -25,16 +25,20 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
   const { locale } = params;
   const router = useRouter();
   const { sessionToken, caseId, setPdfId } = useCaseStore();
+  const [mounted, setMounted] = useState(false);
   const [answers, setAnswers] = useState<AnswerRead[]>([]);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => { setMounted(true); }, []);
+
   useEffect(() => {
+    if (!mounted) return;
     if (!sessionToken || !caseId) { router.replace("/"); return; }
     api.questions.getAll(sessionToken, caseId).then(setAnswers).catch(console.error);
-  }, []);
+  }, [mounted]);
 
-  function handleEdit(fieldKey: string) {
+  function handleEdit() {
     router.push(`/${locale}/questions`);
   }
 
@@ -57,6 +61,7 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
     }
   }
 
+  if (!mounted) return null;
   if (!sessionToken || !caseId) return null;
 
   return (
@@ -67,14 +72,14 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
         <h1 className="text-2xl font-bold text-gray-900 mb-2">{t("title", locale)}</h1>
         <p className="text-gray-500 mb-6">{t("instruction", locale)}</p>
 
-        {error && <p className="text-red-600 text-sm mb-4">{error}</p>}
+        {error && <p className="text-red-600 text-sm mb-4 p-3 bg-red-50 rounded-lg">{error}</p>}
 
         {answers.length === 0 ? (
           <p className="text-gray-400 text-center py-8">Loading answers...</p>
         ) : (
           <AnswerSummary
             answers={answers}
-            onEdit={(fieldKey) => handleEdit(fieldKey)}
+            onEdit={handleEdit}
             editLabel={t("edit", locale)}
           />
         )}

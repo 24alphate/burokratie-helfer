@@ -4,7 +4,7 @@ import { AnswerRead } from "@/types/api";
 
 interface AnswerSummaryProps {
   answers: AnswerRead[];
-  onEdit: (fieldKey: string, currentValue: string) => void;
+  onEdit: () => void;
   editLabel: string;
 }
 
@@ -26,7 +26,7 @@ export function AnswerSummary({ answers, onEdit, editLabel }: AnswerSummaryProps
             )}
           </div>
           <button
-            onClick={() => onEdit(answer.field_key, answer.raw_answer)}
+            onClick={() => onEdit()}
             className="ml-3 text-brand-600 text-sm font-medium hover:underline flex-shrink-0"
           >
             {editLabel}

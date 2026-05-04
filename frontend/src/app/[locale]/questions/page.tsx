@@ -7,19 +7,32 @@ import { StepProgress } from "@/components/layout/StepProgress";
 import { QuestionCard } from "@/components/questions/QuestionCard";
 import { useCaseStore } from "@/store/caseStore";
 import { api } from "@/lib/api";
-import { CompletedSignal, QuestionRead } from "@/types/api";
+import { QuestionRead } from "@/types/api";
+
+const LOADING: Record<string, string> = {
+  en: "Loading...", ar: "جارٍ التحميل...", tr: "Yükleniyor...", de: "Wird geladen...",
+};
+const SUBMIT: Record<string, string> = {
+  en: "Next →", ar: "التالي →", tr: "İleri →", de: "Weiter →",
+};
 
 export default function QuestionsPage({ params }: { params: { locale: string } }) {
   const { locale } = params;
   const router = useRouter();
   const { sessionToken, caseId } = useCaseStore();
-
+  const [mounted, setMounted] = useState(false);
   const [question, setQuestion] = useState<QuestionRead | null>(null);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
-  const submitLabel = { en: "Next →", ar: "التالي →", tr: "İleri →", de: "Weiter →" }[locale] ?? "Next →";
+  useEffect(() => { setMounted(true); }, []);
+
+  useEffect(() => {
+    if (!mounted) return;
+    if (!sessionToken || !caseId) { router.replace("/"); return; }
+    fetchNext();
+  }, [mounted]);
 
   async function fetchNext() {
     if (!sessionToken || !caseId) return;
@@ -36,14 +49,6 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
       setFetchError(e instanceof Error ? e.message : "Failed to load question.");
     }
   }
-
-  useEffect(() => {
-    if (!sessionToken || !caseId) {
-      router.replace("/");
-      return;
-    }
-    fetchNext();
-  }, []);
 
   async function handleAnswer(rawAnswer: string) {
     if (!question || !sessionToken || !caseId) return;
@@ -62,6 +67,7 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
     }
   }
 
+  if (!mounted) return null;
   if (!sessionToken || !caseId) return null;
 
   return (
@@ -71,12 +77,12 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
         <StepProgress currentStep={1} />
 
         {fetchError && (
-          <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-xl text-red-600">{fetchError}</div>
+          <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-xl text-red-600 text-sm">{fetchError}</div>
         )}
 
         {!question && !fetchError && (
           <div className="text-center py-16 text-gray-400 text-lg">
-            {{ en: "Loading...", ar: "جارٍ التحميل...", tr: "Yükleniyor...", de: "Wird geladen..." }[locale] ?? "Loading..."}
+            {LOADING[locale] ?? "Loading..."}
           </div>
         )}
 
@@ -87,7 +93,7 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
             onSubmit={handleAnswer}
             isLoading={isLoading}
             validationErrors={validationErrors}
-            submitLabel={submitLabel}
+            submitLabel={SUBMIT[locale] ?? "Next →"}
           />
         )}
       </main>
