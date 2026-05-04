@@ -27,6 +27,7 @@ export interface UploadResponse {
   detected_form_type: string | null;
   confidence: number;
   requires_manual_selection: boolean;
+  prefilled_fields: number;
 }
 
 export interface OptionRead {

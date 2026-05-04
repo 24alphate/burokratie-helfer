@@ -58,9 +58,20 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
 
   async function handleUploadComplete(result: UploadResponse) {
     setUploadResult(result);
+    // If form detected with high confidence, auto-confirm and proceed
     if (!result.requires_manual_selection && result.detected_form_type) {
       await handleConfirm(result.detected_form_type);
     }
+  }
+
+  const prefilledMsg: Record<string, (n: number) => string> = {
+    en: (n) => `✓ Form detected. ${n > 0 ? `${n} fields pre-filled from your document.` : "No pre-filled data — you will answer all questions."}`,
+    ar: (n) => `✓ تم التعرف على الاستمارة. ${n > 0 ? `تم ملء ${n} حقل تلقائياً.` : "لم يتم العثور على بيانات مملوءة — ستجيب على جميع الأسئلة."}`,
+    tr: (n) => `✓ Form tespit edildi. ${n > 0 ? `${n} alan otomatik dolduruldu.` : "Önceden doldurulmuş veri yok — tüm soruları yanıtlayacaksınız."}`,
+    de: (n) => `✓ Formular erkannt. ${n > 0 ? `${n} Felder wurden vorausgefüllt.` : "Keine vorausgefüllten Daten — Sie beantworten alle Fragen."}`,
+  };
+  function getPrefilledMsg(n: number) {
+    return (prefilledMsg[locale] ?? prefilledMsg.en)(n);
   }
 
   if (!mounted) return null;
@@ -92,7 +103,11 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
           />
         ) : (
           <div className="text-center py-8">
-            <p className="text-brand-600 text-lg font-semibold">{t("detecting", locale)}</p>
+            <div className="text-4xl mb-3">🔍</div>
+            <p className="text-brand-600 text-lg font-semibold mb-2">
+              {getPrefilledMsg(uploadResult.prefilled_fields)}
+            </p>
+            <p className="text-gray-400 text-sm">{t("detecting", locale)}</p>
           </div>
         )}
       </main>

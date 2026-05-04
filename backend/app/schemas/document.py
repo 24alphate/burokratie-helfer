@@ -7,3 +7,4 @@ class UploadResponse(BaseModel):
     detected_form_type: Optional[str]
     confidence: float
     requires_manual_selection: bool
+    prefilled_fields: int = 0
