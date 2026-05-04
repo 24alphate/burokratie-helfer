@@ -1,0 +1,40 @@
+version: "3.9"
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/uploads:/app/uploads
+      - ./backend/generated:/app/generated
+      - ./backend/static_pdfs:/app/static_pdfs
+      - ./backend/burokratie.db:/app/burokratie.db
+    environment:
+      - DATABASE_URL=sqlite:///./burokratie.db
+      - OCR_BACKEND=mock
+      - TRANSLATION_BACKEND=mock
+      - CORS_ORIGINS=["http://localhost:3000"]
+    command: >
+      sh -c "alembic upgrade head &&
+             python -m app.form_templates.seed &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    depends_on:
+      backend:
+        condition: service_healthy

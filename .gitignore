@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+*.db
+test.db
+
+# Sensitive runtime data — never commit
+backend/uploads/
+backend/generated/
+
+# Keep static_pdfs (blank form templates) — these are safe to commit
+!backend/static_pdfs/
+
+# Environment
+.env
+!.env.example
+
+# Node
+node_modules/
+.next/
+frontend/.env.local
+!frontend/.env.local.example
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
