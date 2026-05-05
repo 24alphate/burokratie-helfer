@@ -269,16 +269,19 @@ def _extract_text_with_pdfplumber(pdf_bytes: bytes) -> str:
         return ""
 
 
-def _pdf_to_image_bytes(pdf_bytes: bytes, scale: float = 2.5) -> bytes:
+def _pdf_to_image_bytes_all_pages(pdf_bytes: bytes, scale: float = 2.0, max_pages: int = 6) -> list[bytes]:
     """
-    Render first PDF page to high-resolution PNG using PyMuPDF.
-    scale=2.5 gives ~180 DPI which is good for OCR.
+    Render every page of a PDF to PNG using PyMuPDF.
+    Returns a list of PNG byte strings, one per page.
+    scale=2.0 ≈ 144 DPI — good balance of quality vs payload size.
     """
     doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
-    page = doc.load_page(0)
     mat = pymupdf.Matrix(scale, scale)
-    pix = page.get_pixmap(matrix=mat, alpha=False)
-    return pix.tobytes("png")
+    images = []
+    for i in range(min(len(doc), max_pages)):
+        pix = doc.load_page(i).get_pixmap(matrix=mat, alpha=False)
+        images.append(pix.tobytes("png"))
+    return images
 
 
 def _to_base64(data: bytes) -> str:
@@ -343,26 +346,24 @@ class SmartOCRService(OCRService):
         chain = prompt | structured_llm
         return chain.invoke({"text": text})
 
-    def _extract_from_image(self, img_bytes: bytes, mime: str = "image/png") -> FormExtractionResult:
+    def _extract_from_images(self, images: list[bytes], mime: str = "image/png") -> FormExtractionResult:
         """
-        Vision chain via instructor: image → Groq Llama 4 Scout → Pydantic model.
-        instructor retries automatically if output doesn't match schema (max 3 attempts).
+        Vision chain via instructor: all page images → Groq Llama 4 Scout → Pydantic model.
+        Sends every page in one request so the model sees the entire multi-page form.
+        instructor retries automatically (max 3 attempts) if output doesn't match schema.
         """
         client = self._get_instructor_client()
-        b64 = _to_base64(img_bytes)
-        data_url = f"data:{mime};base64,{b64}"
+        content: list[dict] = []
+        for img in images:
+            b64 = _to_base64(img)
+            content.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+        content.append({"type": "text", "text": f"{SYSTEM_PROMPT}\n\n{IMAGE_PROMPT}"})
 
         return client.chat.completions.create(
             model="meta-llama/llama-4-scout-17b-16e-instruct",
             response_model=FormExtractionResult,
             max_retries=3,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": {"url": data_url}},
-                    {"type": "text", "text": f"{SYSTEM_PROMPT}\n\n{IMAGE_PROMPT}"},
-                ],
-            }],
+            messages=[{"role": "user", "content": content}],
         )
 
     async def extract_text(self, file_bytes: bytes) -> OCRResult:
@@ -381,21 +382,34 @@ class SmartOCRService(OCRService):
 
         try:
             if mime == "application/pdf":
-                # Strategy 1: pdfplumber text extraction (best for native PDFs)
+                # Strategy 1: pdfplumber — fast text extraction for native PDFs
                 pdf_text = _extract_text_with_pdfplumber(file_bytes)
+                text_result: Optional[FormExtractionResult] = None
 
                 if _is_text_rich(pdf_text):
                     strategy_used = "pdfplumber+langchain-text"
-                    result = self._extract_from_text(pdf_text)
+                    text_result = self._extract_from_text(pdf_text)
+
+                # Strategy 2: render ALL pages to images → vision model
+                # Always run vision when text finds fewer than 3 fields, or as sole path for scans.
+                text_fields = 0
+                if text_result:
+                    text_fields = sum(1 for v in text_result.extracted_fields.model_dump().values() if v)
+
+                if text_fields < 3:
+                    strategy_used = "pymupdf-all-pages+langchain-vision"
+                    page_images = _pdf_to_image_bytes_all_pages(file_bytes, scale=2.0, max_pages=6)
+                    vision_result = self._extract_from_images(page_images, "image/png")
+
+                    # Merge: take vision unless text found more fields
+                    vision_fields = sum(1 for v in vision_result.extracted_fields.model_dump().values() if v)
+                    result = vision_result if vision_fields >= text_fields else text_result
                 else:
-                    # Strategy 2: render to image (scanned PDF)
-                    strategy_used = "pymupdf+langchain-vision"
-                    img_bytes = _pdf_to_image_bytes(file_bytes, scale=2.5)
-                    result = self._extract_from_image(img_bytes, "image/png")
+                    result = text_result
             else:
-                # Strategy 3: direct image input
+                # Strategy 3: direct image input (JPEG, PNG, TIFF)
                 strategy_used = "langchain-vision"
-                result = self._extract_from_image(file_bytes, mime)
+                result = self._extract_from_images([file_bytes], mime)
 
         except Exception as exc:
             return OCRResult(
@@ -415,7 +429,6 @@ class SmartOCRService(OCRService):
                 metadata={"error": "No result returned"},
             )
 
-        # Build clean extracted fields dict (remove nulls)
         fields_dict = result.extracted_fields.model_dump()
         clean_fields = {k: v for k, v in fields_dict.items() if v is not None}
 
