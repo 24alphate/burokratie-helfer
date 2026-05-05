@@ -12,6 +12,7 @@ from app.config import settings
 from app.models.answer import Answer
 from app.models.audit_log import AuditAction
 from app.models.case import Case, CaseStatus
+from app.models.document import UploadedDocument
 from app.models.form_template import FormField, FormTemplate
 from app.models.generated_pdf import GeneratedPDF
 from app.models.question import Question
@@ -66,7 +67,18 @@ async def generate_pdf(
             continue
         translated_values[pdf_name] = answer.translated_answer or answer.raw_answer
 
-    blank_pdf_path = Path(settings.static_pdfs_dir) / (template.blank_pdf_filename or "alg2_blank.pdf")
+    # Dynamic templates use the original uploaded PDF as the base;
+    # fixed templates use the pre-built blank form.
+    is_dynamic = case.form_template_id.startswith("dyn_")
+    if is_dynamic:
+        uploaded_doc = db.query(UploadedDocument).filter_by(case_id=case_id).order_by(
+            UploadedDocument.uploaded_at.desc()
+        ).first()
+        if not uploaded_doc or not Path(uploaded_doc.storage_path).exists():
+            raise HTTPException(status_code=404, detail="Original uploaded PDF not found.")
+        blank_pdf_path = Path(uploaded_doc.storage_path)
+    else:
+        blank_pdf_path = Path(settings.static_pdfs_dir) / (template.blank_pdf_filename or "alg2_blank.pdf")
 
     pdf_request = PDFGenerationRequest(
         template_id=case.form_template_id,

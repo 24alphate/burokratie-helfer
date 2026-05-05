@@ -11,9 +11,9 @@ import { api } from "@/lib/api";
 import { UploadResponse } from "@/types/api";
 
 const T: Record<string, Record<string, string>> = {
-  upload_title: { en: "Upload your Jobcenter form", ar: "ارفع استمارة مركز التشغيل", tr: "Jobcenter formunuzu yükleyin", de: "Formular hochladen" },
-  upload_instruction: { en: "Drag & drop your PDF or image here, or click to select.", ar: "اسحب وأفلت PDF أو صورة، أو انقر للاختيار.", tr: "PDF'i sürükleyip bırakın veya seçmek için tıklayın.", de: "PDF hier ablegen oder klicken." },
-  supported: { en: "PDF, JPG, PNG (max 10MB)", ar: "PDF، JPG، PNG (أقصى 10 ميجابايت)", tr: "PDF, JPG, PNG (maks. 10MB)", de: "PDF, JPG, PNG (max. 10 MB)" },
+  upload_title: { en: "Upload any fillable PDF form", ar: "ارفع أي نموذج PDF قابل للتعبئة", tr: "Herhangi bir doldurulabilir PDF yükleyin", de: "Beliebiges PDF-Formular hochladen" },
+  upload_instruction: { en: "Drag & drop any fillable PDF here — fields are read directly from your document.", ar: "اسحب أي نموذج PDF قابل للتعبئة هنا — تُقرأ الحقول مباشرة من مستندك.", tr: "Doldurulabilir herhangi bir PDF'yi buraya sürükleyin — alanlar doğrudan belgenizden okunur.", de: "Beliebiges ausfüllbares PDF hier ablegen — Felder werden direkt aus dem Dokument gelesen." },
+  supported: { en: "Any fillable PDF (government forms, contracts, applications…)", ar: "أي نموذج PDF قابل للتعبئة (نماذج حكومية، عقود، طلبات...)", tr: "Her doldurulabilir PDF (resmi formlar, sözleşmeler, başvurular…)", de: "Jedes ausfüllbare PDF (Behördenformulare, Verträge, Anträge…)" },
   detecting: { en: "Detecting form type...", ar: "جارٍ التعرف على الاستمارة...", tr: "Form türü tespit ediliyor...", de: "Formular wird erkannt..." },
   confirm: { en: "Confirm & Continue", ar: "تأكيد ومتابعة", tr: "Onayla ve Devam Et", de: "Bestätigen & Weiter" },
   select_prompt: { en: "Please select your form type:", ar: "يرجى تحديد نوع الاستمارة:", tr: "Lütfen form türünüzü seçin:", de: "Bitte Formulartyp wählen:" },
