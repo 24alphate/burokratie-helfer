@@ -12,7 +12,7 @@ from app.models.answer import Answer
 from app.models.audit_log import AuditAction
 from app.models.case import Case, CaseStatus
 from app.models.document import UploadedDocument
-from app.models.form_template import FormField
+from app.models.form_template import FormField, FormTemplate
 from app.models.user import User
 from app.schemas.document import UploadResponse
 from app.services.audit_service import audit_service
@@ -66,8 +66,15 @@ async def upload_document(
     db.add(doc)
     db.flush()
 
-    # Set form type on case if OCR detected it with high confidence
-    if detected_type and ocr_result.confidence >= 0.7:
+    # Auto-select form type: use OCR result if confident, else fall back to
+    # the only available template (avoids the manual selector when there is
+    # only one form type in the system).
+    if not detected_type or ocr_result.confidence < 0.7:
+        all_templates = db.query(FormTemplate).all()
+        if len(all_templates) == 1:
+            detected_type = all_templates[0].id
+
+    if detected_type:
         case.form_template_id = detected_type
         case.status = CaseStatus.FORM_SELECTED.value
     else:
@@ -133,6 +140,6 @@ async def upload_document(
         document_id=doc.id,
         detected_form_type=detected_type,
         confidence=ocr_result.confidence,
-        requires_manual_selection=(not detected_type or ocr_result.confidence < 0.7),
+        requires_manual_selection=not detected_type,
         prefilled_fields=prefilled_count,
     )

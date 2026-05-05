@@ -15,6 +15,12 @@ const LOADING: Record<string, string> = {
 const SUBMIT: Record<string, string> = {
   en: "Next →", ar: "التالي →", tr: "İleri →", de: "Weiter →",
 };
+const PREFILL_BANNER: Record<string, (n: number) => string> = {
+  en: (n) => `✓ ${n} field${n !== 1 ? "s" : ""} were pre-filled from your document and skipped.`,
+  ar: (n) => `✓ تم ملء ${n} حقل تلقائياً من مستندك وتم تخطيه.`,
+  tr: (n) => `✓ ${n} alan belgenizden otomatik dolduruldu ve atlandı.`,
+  de: (n) => `✓ ${n} Feld${n !== 1 ? "er" : ""} wurden aus Ihrem Dokument vorausgefüllt und übersprungen.`,
+};
 
 export default function QuestionsPage({ params }: { params: { locale: string } }) {
   const { locale } = params;
@@ -25,6 +31,7 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [prefillCount, setPrefillCount] = useState<number | null>(null);
 
   useEffect(() => { setMounted(true); }, []);
 
@@ -42,8 +49,11 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
       if ("completed" in result) {
         router.push(`/${locale}/review`);
       } else {
-        setQuestion(result as QuestionRead);
+        const q = result as QuestionRead;
+        setQuestion(q);
         setValidationErrors([]);
+        // On first load, detect pre-filled questions (answered_count > 0 before user answered anything)
+        setPrefillCount((prev) => prev === null && q.answered_count > 0 ? q.answered_count : prev);
       }
     } catch (e: unknown) {
       setFetchError(e instanceof Error ? e.message : "Failed to load question.");
@@ -78,6 +88,28 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
 
         {fetchError && (
           <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-xl text-red-600 text-sm">{fetchError}</div>
+        )}
+
+        {prefillCount !== null && prefillCount > 0 && (
+          <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-xl text-green-700 text-sm">
+            {(PREFILL_BANNER[locale] ?? PREFILL_BANNER.en)(prefillCount)}
+          </div>
+        )}
+
+        {question && (
+          <div className="mb-2 flex items-center justify-between text-sm text-gray-400">
+            <span>
+              {locale === "ar"
+                ? `سؤال ${question.answered_count + 1} من ${question.total_count}`
+                : `Question ${question.answered_count + 1} of ${question.total_count}`}
+            </span>
+            <div className="flex-1 mx-4 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-brand-600 rounded-full transition-all duration-300"
+                style={{ width: `${Math.round(((question.answered_count) / question.total_count) * 100)}%` }}
+              />
+            </div>
+          </div>
         )}
 
         {!question && !fetchError && (

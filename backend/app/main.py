@@ -17,7 +17,7 @@ from app.services.pdf_generator.pypdf_generator import PDFGeneratorFactory
 
 
 def _seed_templates_if_needed():
-    """Seed form templates on startup. Safe to run multiple times (idempotent)."""
+    """Seed form templates on startup. Re-seeds when the JSON version changes."""
     from app.form_templates.seed import seed_template
     from app.models.form_template import FormTemplate
 
@@ -28,8 +28,12 @@ def _seed_templates_if_needed():
             with open(json_file, encoding="utf-8") as f:
                 data = json.load(f)
             existing = db.query(FormTemplate).filter(FormTemplate.id == data["id"]).first()
-            if not existing:
-                seed_template(db, data)
+            if existing and existing.version == data.get("version", "1.0"):
+                continue  # already up to date
+            if existing:
+                db.delete(existing)
+                db.flush()
+            seed_template(db, data)
     finally:
         db.close()
 
