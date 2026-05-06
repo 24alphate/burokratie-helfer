@@ -267,6 +267,7 @@ async def process_pdf(
         field_ids=extracted_ids,
         filename=filename,
         secret_key=settings.secret_key,
+        template_id=extraction.template_id,   # None for AcroForm/unknown
     )
 
     return ProcessPdfResponse(

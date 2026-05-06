@@ -274,7 +274,8 @@ export const api = {
     pdfToken: string,
     answers: Record<string, string>,
     fieldLabels: Record<string, string> = {},
-  ): Promise<Blob> => {
+    debugOverlay = false,
+  ): Promise<{ blob: Blob; notFillable: string[]; strategy: string }> => {
     const url = `${BASE}/fill-pdf`;
     console.log("[fillPdf] POST", url, "answer_count:", Object.keys(answers).length);
 
@@ -283,7 +284,12 @@ export const api = {
       res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pdf_token: pdfToken, answers, field_labels: fieldLabels }),
+        body: JSON.stringify({
+          pdf_token: pdfToken,
+          answers,
+          field_labels: fieldLabels,
+          debug_overlay: debugOverlay,
+        }),
       });
     } catch (err) {
       console.error("[fillPdf] Network error:", err);
@@ -296,6 +302,12 @@ export const api = {
       console.error("[fillPdf] HTTP", res.status, msg);
       throw classifyError(new ApiError(msg, res.status), res.status);
     }
-    return res.blob();
+
+    const notFillableHeader = res.headers.get("X-Not-Fillable-Fields") ?? "";
+    const notFillable = notFillableHeader ? notFillableHeader.split(",").filter(Boolean) : [];
+    const strategy = res.headers.get("X-Fill-Strategy") ?? "unknown";
+    console.log("[fillPdf] strategy:", strategy, "not_fillable:", notFillable);
+
+    return { blob: await res.blob(), notFillable, strategy };
   },
 };

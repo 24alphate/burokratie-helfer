@@ -251,3 +251,83 @@ class JobcenterButTemplate(VerifiedTemplate):
               conf=0.5,
               src_text="Unterschrift des gesetzlichen Vertreters"),
         ]
+
+    def get_write_specs(self) -> list:
+        from app.services.form_templates import WriteSpec
+
+        # Helper: text field — write below the label line
+        def txt(field_id, label_search, page, offset_y=10.0, font_size=9.0):
+            return WriteSpec(
+                field_id=field_id, field_type="text", source_page=page,
+                strategy="label_search", label_search=label_search,
+                offset_x=0.0, offset_y=offset_y, font_size=font_size,
+            )
+
+        # Helper: checkbox — draw X to the left of the label text (where the box is)
+        def chk(field_id, label_search, page, offset_x=-12.0, offset_y=-3.0):
+            return WriteSpec(
+                field_id=field_id, field_type="checkbox", source_page=page,
+                strategy="label_search", label_search=label_search,
+                offset_x=offset_x, offset_y=offset_y,
+                font_size=9.0, checkbox_size=4.0,
+            )
+
+        # Helper: skip (signature — user signs manually)
+        def sig(field_id, page):
+            return WriteSpec(
+                field_id=field_id, field_type="signature", source_page=page,
+                strategy="skip",
+            )
+
+        return [
+            # ── Section 1: Persönliche Angaben ────────────────────────────────
+            txt("applicant_name_vorname",        "Name, Vorname",                          1),
+            txt("applicant_postanschrift",        "Postanschrift",                          1),
+            txt("bedarfsgemeinschaft_nummer",     "Nummer der Bedarfsgemeinschaft",         1),
+            txt("tag_der_antragstellung",         "Tag der Antragstellung",                 1),
+
+            # Benefit type checkboxes
+            chk("benefit_sgb_ii",                "Leistungen nach dem SGB II",             1),
+            chk("benefit_sgb_xii",               "Leistungen nach dem SGB XII",            1),
+            chk("benefit_kinderzuschlag",         "Kinderzuschlag nach dem BKGG",           1),
+            chk("benefit_wohngeld",               "Wohngeld nach dem WoGG",                 1),
+            chk("benefit_asylbewerberleistungsgesetz",
+                                                  "Leistungen nach dem Asylbewerberleistungsgesetz", 1),
+            chk("benefit_sonstige",               "Sonstige",                               1),
+
+            txt("bg_nummer",                      "BG-Nummer / Aktenzeichen",               1),
+            txt("zustaendiger_standort",           "Zuständiger Standort",                   1),
+
+            # ── Section 2: Kind / Jugendliche/r ──────────────────────────────
+            txt("child_name_vorname_geburtsdatum", "Name, Vorname, Geburtsdatum des Kindes", 1),
+            txt("institution_name",               "Name der Schule / Kindertagesstätte / Einrichtung", 1),
+            txt("institution_address",            "Anschrift der Schule / Kindertagesstätte", 1),
+
+            # ── Section 3: Beantragte Leistung A–F ───────────────────────────
+            chk("leistung_a_ausflug",             "A Eintägige Ausflüge von Schulen und Kindertageseinrichtungen", 1),
+            chk("leistung_b_klassenfahrt",        "B Mehrtägige Klassenfahrten und Fahrten der Kindertageseinrichtungen", 1),
+            chk("leistung_c_schuelerbefoerderung","C Schülerbeförderung",                   1),
+            chk("leistung_d_lernfoerderung",      "D Lernförderung",                        1),
+            chk("leistung_e_mittagessen",         "E Gemeinschaftliches Mittagessen",        1),
+            chk("leistung_f_soziale_teilhabe",    "F Soziale und kulturelle Teilhabe",       1),
+
+            # ── Section 3.C: Schülerbeförderung ──────────────────────────────
+            txt("transport_cost_period",          "Kosten der Beförderung monatlich / vierteljährlich / jährlich", 2),
+            txt("transport_public_cost_eur",      "Kosten für öffentliche Verkehrsmittel",  2),
+            txt("transport_private_cost_eur",     "Kosten für private Beförderung (Kraftfahrzeug)", 2),
+            txt("transport_distance_km",          "Einfache Strecke in km",                 2),
+
+            # ── Section 3.E: Mittagessen ──────────────────────────────────────
+            txt("essen_anbieter",                 "Name des Essenanbieters",                2),
+            chk("lunch_school_hort",              "in einer Schule oder einem Hort",        2),
+            chk("lunch_kita_kindertagespflege",   "in einer Kindertageseinrichtung oder Kindertagespflege", 2),
+            txt("lunch_sonstige_angaben",         "Sonstige Angaben",                       2),
+
+            # ── Declarations / Signature ──────────────────────────────────────
+            chk("consent_direct_settlement",
+                "Ich bin damit einverstanden, dass das Jobcenter die Leistung direkt mit dem Leistungsanbieter abrechnet", 2),
+            txt("ort_datum_antragsteller",        "Ort, Datum",                             2),
+            sig("signature_antragsteller",                                                    2),
+            txt("ort_datum_vertreter",            "Ort, Datum (gesetzlicher Vertreter)",    2),
+            sig("signature_vertreter",                                                        2),
+        ]

@@ -41,6 +41,7 @@ def sign_pdf_token(
     field_ids: list[str],
     filename: str,
     secret_key: str,
+    template_id: str | None = None,
 ) -> str:
     """
     Sign a PDF token.  Returns a URL-safe signed string.
@@ -52,9 +53,10 @@ def sign_pdf_token(
     compressed = zlib.compress(pdf_bytes, level=9)
     pdf_b64 = base64.b64encode(compressed).decode("ascii")
     payload = {
-        "pdf_b64":   pdf_b64,
-        "field_ids": field_ids,
-        "filename":  filename,
+        "pdf_b64":     pdf_b64,
+        "field_ids":   field_ids,
+        "filename":    filename,
+        "template_id": template_id,  # None for AcroForm/unknown PDFs
     }
     return _serializer(secret_key).dumps(payload)
 
@@ -75,7 +77,8 @@ def verify_pdf_token(token: str, secret_key: str) -> dict:
     payload = _serializer(secret_key).loads(token, max_age=_MAX_AGE)
     compressed = base64.b64decode(payload["pdf_b64"])
     return {
-        "pdf_bytes":  zlib.decompress(compressed),
-        "field_ids":  payload["field_ids"],
-        "filename":   payload.get("filename", "form.pdf"),
+        "pdf_bytes":   zlib.decompress(compressed),
+        "field_ids":   payload["field_ids"],
+        "filename":    payload.get("filename", "form.pdf"),
+        "template_id": payload.get("template_id"),   # None for old tokens / AcroForm
     }
