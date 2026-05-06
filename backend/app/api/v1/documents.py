@@ -42,6 +42,10 @@ from app.models.user import User
 from app.schemas.document import FieldDefinition, FieldOption, UploadResponse
 from app.services.audit_service import audit_service
 from app.services.dynamic_form_service import create_dynamic_template
+from app.services.pdf_pipeline import (
+    extract_field_map, detect_pdf_type,
+    validate_no_hallucinations, field_map_to_defs, FieldMapEntry,
+)
 from app.services.question_translator import static_fallback, translate_fields
 from app.services.validation_service import validation_service
 
@@ -403,46 +407,161 @@ async def extract_pdf_fields(
         log.warning("extract-pdf-fields not a PDF case=%s", case_id)
         raise HTTPException(status_code=400, detail="Uploaded file is not a PDF.")
 
-    extracted_fields = _extract_acroform_fields(pdf_bytes)
-    log.info("extract-pdf-fields extracted case=%s count=%d", case_id, len(extracted_fields))
-    if not extracted_fields:
-        log.info("extract-pdf-fields no AcroForm fields case=%s — 422", case_id)
-        raise HTTPException(status_code=422, detail="No AcroForm fields found in PDF.")
+    # ── 1. Detect PDF type + extract deterministic field map ─────────────────
+    extraction = extract_field_map(pdf_bytes)
+    log.info(
+        "extract-pdf-fields type=%s pages=%d fields=%d case=%s",
+        extraction.pdf_type, extraction.total_pages, len(extraction.fields), case_id,
+    )
 
-    # Translate questions + option labels via Groq (this endpoint has no time pressure)
-    translations = translate_fields(extracted_fields, user_language, document_language)
+    if not extraction.fields:
+        log.info("extract-pdf-fields no fields found case=%s pdf_type=%s", case_id, extraction.pdf_type)
+        detail = {
+            "acroform": "This PDF has an AcroForm but no extractable widget fields.",
+            "flat":     "This PDF has no fillable fields and no recognisable field patterns.",
+            "scanned":  "This PDF appears to be a scanned image — OCR is not yet supported.",
+        }.get(extraction.pdf_type, "No fields could be extracted from this PDF.")
+        raise HTTPException(status_code=422, detail=detail)
 
-    prefilled_raw = {f["field_name"]: f["current_value"]
-                     for f in extracted_fields if f["current_value"]}
+    # ── 2. Translate field labels + options via Groq ───────────────────────────
+    #    Input: only the exact field_ids from the field map — AI cannot invent new ones
+    fields_for_groq = [
+        {
+            "field_name": e.field_id,
+            "field_type": e.field_type,
+            "options": e.options,
+            "original_label": e.original_label,
+        }
+        for e in extraction.fields
+    ]
+    raw_translations = translate_fields(fields_for_groq, user_language, document_language)
+
+    # ── 3. Anti-hallucination validation ──────────────────────────────────────
+    report = validate_no_hallucinations(extraction.fields, raw_translations)
+    if not report.is_clean:
+        log.warning(
+            "extract-pdf-fields hallucination case=%s invented=%s missing=%s",
+            case_id, report.invented, report.missing,
+        )
+    log.info(
+        "extract-pdf-fields validation clean=%s invented=%d missing=%d case=%s",
+        report.is_clean, len(report.invented), len(report.missing), case_id,
+    )
+
+    # ── 4. Build field definitions (one per extracted field, no extras) ────────
+    prefilled_raw = {e.field_id: e.current_value for e in extraction.fields if e.current_value}
     form_name = storage_path.stem.replace("_", " ").title()
 
     template_id, _ = create_dynamic_template(
         db=db, case_id=case_id,
-        acroform_fields={f["field_name"]: f["current_value"] for f in extracted_fields},
+        acroform_fields={e.field_id: e.current_value for e in extraction.fields},
         form_name=form_name,
     )
-    case.form_template_id = template_id
-    case.status           = CaseStatus.FORM_SELECTED.value
-    case.updated_at       = datetime.now(timezone.utc)
+    case.form_template_id  = template_id
+    case.status            = CaseStatus.FORM_SELECTED.value
+    case.updated_at        = datetime.now(timezone.utc)
     doc.detected_form_type = template_id
-    doc.ocr_confidence     = 1.0
+    doc.ocr_confidence     = extraction.fields[0].confidence if extraction.fields else 0.5
 
     db.flush()
 
-    count = _save_prefilled_answers(db, case_id, template_id, prefilled_raw)
-
-    field_defs = _build_field_defs(
-        extracted_fields, translations,
-        set(prefilled_raw.keys()), user_language, document_language, 1.0,
+    count     = _save_prefilled_answers(db, case_id, template_id, prefilled_raw)
+    field_defs = field_map_to_defs(
+        extraction.fields,
+        report.cleaned_translations,
+        set(prefilled_raw.keys()),
+        user_language,
+        document_language,
     )
     db.commit()
 
     return UploadResponse(
         document_id=doc.id, detected_form_type=template_id,
-        confidence=1.0, requires_manual_selection=False,
+        confidence=extraction.fields[0].confidence if extraction.fields else 0.5,
+        requires_manual_selection=False,
         prefilled_fields=count, fields=field_defs,
         document_language=document_language, user_language=user_language,
     )
+
+
+# ── Diagnostic: raw field map ─────────────────────────────────────────────────
+
+@router.get("/{case_id}/analyze-pdf")
+async def analyze_pdf(
+    case_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Returns the raw deterministic field map for the uploaded PDF.
+
+    Shows PDF type, page count, and each extracted field with:
+    - field_id (ground truth anchor)
+    - original_label (PDF language)
+    - field_type
+    - source_page + bbox
+    - options (for choice fields)
+    - confidence + source (acroform | pdfplumber | ocr)
+
+    Use this endpoint to verify extraction BEFORE questions are generated.
+    Also reports which questions would be valid (= all extracted fields)
+    and which would be hallucinated (= none, by design).
+    """
+    case = db.query(Case).filter(Case.id == case_id, Case.user_id == user.id).first()
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found.")
+
+    doc = (
+        db.query(UploadedDocument)
+        .filter(UploadedDocument.case_id == case_id)
+        .order_by(UploadedDocument.uploaded_at.desc())
+        .first()
+    )
+    if not doc or not doc.storage_path:
+        raise HTTPException(status_code=404, detail="No uploaded document.")
+
+    storage_path = Path(doc.storage_path)
+    if not storage_path.exists():
+        raise HTTPException(status_code=404, detail="Uploaded file not on disk.")
+
+    pdf_bytes = storage_path.read_bytes()
+    is_pdf    = pdf_bytes[:4] == b"%PDF"
+
+    if not is_pdf:
+        return {
+            "pdf_type": "not_pdf",
+            "total_pages": 0,
+            "field_count": 0,
+            "fields": [],
+            "filename": doc.original_filename,
+        }
+
+    extraction = extract_field_map(pdf_bytes)
+
+    return {
+        "pdf_type": extraction.pdf_type,
+        "total_pages": extraction.total_pages,
+        "field_count": len(extraction.fields),
+        "filename": doc.original_filename,
+        "fields": [
+            {
+                "field_id":       e.field_id,
+                "original_label": e.original_label,
+                "field_type":     e.field_type,
+                "source_page":    e.source_page,
+                "bbox":           e.bbox,
+                "options":        e.options,
+                "current_value":  e.current_value,
+                "confidence":     e.confidence,
+                "source":         e.source,
+            }
+            for e in extraction.fields
+        ],
+        "anti_hallucination": {
+            "rule": "Every question must reference a field_id from this list.",
+            "valid_field_ids": [e.field_id for e in extraction.fields],
+        },
+    }
 
 
 # ── Lazy translation endpoint — called fire-and-forget by frontend ─────────────
