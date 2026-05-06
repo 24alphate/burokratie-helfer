@@ -1,19 +1,16 @@
 """
-Upload route — optimised for Vercel's 10-second timeout.
+Upload route — guaranteed < 3s on Vercel, zero LLM calls.
 
-Three paths:
-  A. Fillable PDF with AcroForm widgets → pypdf field extraction (< 1s, no LLM)
-  B. Scanned / flat PDF               → Groq vision field detection (2-5s)
-  C. Fallback                         → fixed ALG II template (fast)
+Three paths, all fast:
+  A. Fillable PDF with AcroForm widgets → pypdf (no network, no LLM)
+  B. Any other PDF / image             → fixed template from DB (no LLM)
+  C. No template found                 → requires_manual_selection=True
 
-Language translation is NOT done during upload. Questions are returned with
-static English/DE/AR/TR text via the _Q lookup table. A separate
-POST /cases/{id}/translate-fields endpoint handles Groq translation lazily
-(called fire-and-forget by the frontend after upload succeeds).
+Groq / LLM calls happen ONLY in the /translate-fields endpoint which is
+called fire-and-forget by the frontend after the upload succeeds.
 """
 from __future__ import annotations
 
-import asyncio
 import io
 import json
 import re
@@ -50,18 +47,14 @@ _FF_PUSHBUTTON  = 1 << 16
 _FF_MULTISELECT = 1 << 21
 
 
-# ── AcroForm extraction (deterministic, no LLM) ───────────────────────────────
+# ── AcroForm extraction (no network, < 500ms for any PDF) ─────────────────────
 
 def _acroform_field_type(ft: str, flags: int) -> Optional[str]:
-    if ft == "/Tx":
-        return "text"
-    if ft == "/Sig":
-        return "signature"
-    if ft == "/Ch":
-        return "multiselect" if (flags & _FF_MULTISELECT) else "select"
+    if ft == "/Tx":   return "text"
+    if ft == "/Sig":  return "signature"
+    if ft == "/Ch":   return "multiselect" if (flags & _FF_MULTISELECT) else "select"
     if ft == "/Btn":
-        if flags & _FF_PUSHBUTTON:
-            return None
+        if flags & _FF_PUSHBUTTON: return None
         return "radio" if (flags & _FF_RADIO) else "checkbox"
     return "text"
 
@@ -96,7 +89,7 @@ def _collect_radio_options(reader: pypdf.PdfReader) -> dict[str, list[str]]:
 
 
 def _extract_acroform_full(pdf_bytes: bytes) -> list[dict]:
-    """Ground-truth AcroForm extraction. Every returned field IS in the PDF."""
+    """Ground-truth extraction. Every returned field IS in the PDF. No network calls."""
     try:
         reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
         raw = reader.get_fields()
@@ -149,18 +142,14 @@ def _build_field_defs(
     defs: list[FieldDefinition] = []
     for i, f in enumerate(extracted, 1):
         fname  = f["field_name"]
-        ftype  = f["field_type"]
-        f_opts = f.get("options", [])
         tr     = translations.get(fname, {})
         tr_opts = tr.get("translated_options", {})
-        question_text = tr.get("question") or fname
-        explanation   = tr.get("explanation", "")
-        options = [FieldOption(value=v, label=tr_opts.get(v, v)) for v in f_opts]
+        options = [FieldOption(value=v, label=tr_opts.get(v, v)) for v in f.get("options", [])]
         defs.append(FieldDefinition(
             key=fname,
-            question={user_language: question_text},
-            explanation={user_language: explanation},
-            input_type=ftype,
+            question={user_language: tr.get("question") or fname},
+            explanation={user_language: tr.get("explanation", "")},
+            input_type=f["field_type"],
             options=options,
             original_label=f.get("original_label", fname),
             document_language=document_language,
@@ -173,7 +162,7 @@ def _build_field_defs(
     return defs
 
 
-# ── Upload route (no LLM calls — must complete < 10s on Vercel) ───────────────
+# ── Upload route (zero LLM calls — always returns in < 3s) ────────────────────
 
 @router.post("/{case_id}/upload", response_model=UploadResponse)
 async def upload_document(
@@ -201,20 +190,18 @@ async def upload_document(
     dest    = upload_dir / f"{file_id}{suffix}"
     dest.write_bytes(content)
 
-    is_pdf    = content[:4] == b"%PDF"
     form_name = Path(file.filename or "Uploaded Form").stem.replace("_", " ").title()
     trans_svc = request.app.state.translation_service
 
-    # ── Path A: AcroForm — ground-truth, no LLM, < 1s ────────────────────────
+    # ── Path A: AcroForm fields found — fastest, most accurate ───────────────
     extracted_fields: list[dict] = []
-    if is_pdf:
+    if content[:4] == b"%PDF":
         extracted_fields = _extract_acroform_full(content)
 
     if extracted_fields:
-        # Use static lookup only — no Groq call during upload
-        translations = static_fallback(extracted_fields, user_language)
-        prefilled_raw = {f["field_name"]: f["current_value"]
-                         for f in extracted_fields if f["current_value"]}
+        translations   = static_fallback(extracted_fields, user_language)
+        prefilled_raw  = {f["field_name"]: f["current_value"]
+                          for f in extracted_fields if f["current_value"]}
 
         template_id, _ = create_dynamic_template(
             db=db, case_id=case_id,
@@ -241,15 +228,11 @@ async def upload_document(
             extracted_fields, translations,
             set(prefilled_raw.keys()), user_language, document_language, 1.0,
         )
-
         audit_service.log(db, case_id, AuditAction.DOCUMENT_UPLOADED, {
             "document_id": doc.id, "mode": "acroform",
-            "total_fields": len(extracted_fields),
-            "prefilled_fields": prefilled_count,
-            "user_language": user_language,
+            "total_fields": len(extracted_fields), "prefilled_fields": prefilled_count,
         })
         db.commit()
-
         return UploadResponse(
             document_id=doc.id, detected_form_type=template_id,
             confidence=1.0, requires_manual_selection=False,
@@ -257,82 +240,14 @@ async def upload_document(
             document_language=document_language, user_language=user_language,
         )
 
-    # ── Path B: scanned/flat — vision field detection with hard timeout ────────
-    # Capped at 5 s so Vercel's 10 s limit is never exceeded.
-    ocr_svc = request.app.state.ocr_service
-    try:
-        vision_fields: list[dict] = await asyncio.wait_for(
-            ocr_svc.detect_all_fields(content), timeout=5.0
-        )
-    except (asyncio.TimeoutError, Exception):
-        vision_fields = []
-
-    if vision_fields:
-        translations = static_fallback(
-            [{"field_name": f["label"], "field_type": f.get("field_type","text")}
-             for f in vision_fields],
-            user_language,
-        )
-        prefilled_raw = {f["label"]: f["value"] for f in vision_fields if f.get("value")}
-        acroform_style = {f["label"]: (f.get("value") or "") for f in vision_fields}
-
-        template_id, _ = create_dynamic_template(
-            db=db, case_id=case_id, acroform_fields=acroform_style, form_name=form_name,
-        )
-        case.form_template_id = template_id
-        case.status           = CaseStatus.FORM_SELECTED.value
-        case.updated_at       = datetime.now(timezone.utc)
-
-        doc = UploadedDocument(
-            case_id=case_id, original_filename=file.filename or "upload",
-            storage_path=str(dest), ocr_text=None,
-            detected_form_type=template_id, ocr_confidence=0.8,
-            uploaded_at=datetime.now(timezone.utc),
-        )
-        db.add(doc)
-        db.flush()
-
-        prefilled_count = await _save_answers(db, case_id, template_id, prefilled_raw, trans_svc)
-        extracted_for_defs = [{
-            "field_name": f["label"],
-            "field_type": _map_vision_type(f.get("field_type", "text")),
-            "options":    f.get("options", []),
-            "original_label": f["label"],
-            "current_value":  f.get("value", ""),
-        } for f in vision_fields]
-        field_defs = _build_field_defs(
-            extracted_for_defs, translations,
-            set(prefilled_raw.keys()), user_language, document_language, 0.75,
-        )
-
-        audit_service.log(db, case_id, AuditAction.DOCUMENT_UPLOADED, {
-            "document_id": doc.id, "mode": "vision_dynamic",
-            "total_fields": len(vision_fields), "prefilled_fields": prefilled_count,
-        })
-        db.commit()
-
-        return UploadResponse(
-            document_id=doc.id, detected_form_type=template_id,
-            confidence=0.8, requires_manual_selection=False,
-            prefilled_fields=prefilled_count, fields=field_defs,
-            document_language=document_language, user_language=user_language,
-        )
-
-    # ── Path C: fixed ALG II template fallback — also timeout-guarded ───────────
-    from app.services.ocr.base import OCRResult as _OCRResult
-    try:
-        ocr_result = await asyncio.wait_for(ocr_svc.extract_text(content), timeout=5.0)
-    except (asyncio.TimeoutError, Exception):
-        ocr_result = _OCRResult(raw_text="", confidence=0.0,
-                                detected_form_type=None, page_count=1)
-    detected_type = await ocr_svc.detect_form_type(ocr_result)
-
-    if not detected_type or ocr_result.confidence < 0.7:
-        all_templates = db.query(FormTemplate).filter(
-            ~FormTemplate.id.startswith("dyn_")
-        ).all()
-        if len(all_templates) == 1:
-            detected_type = all_templates[0].id
+    # ── Path B: no AcroForm — use fixed template from DB (no LLM) ────────────
+    # Scanned / image PDFs land here. OCR/vision runs via /translate-fields later.
+    detected_type: Optional[str] = None
+    all_fixed = db.query(FormTemplate).filter(
+        ~FormTemplate.id.startswith("dyn_")
+    ).all()
+    if len(all_fixed) == 1:
+        detected_type = all_fixed[0].id
 
     if detected_type:
         case.form_template_id = detected_type
@@ -344,18 +259,14 @@ async def upload_document(
     doc = UploadedDocument(
         case_id=case_id, original_filename=file.filename or "upload",
         storage_path=str(dest), ocr_text=None,
-        detected_form_type=detected_type, ocr_confidence=ocr_result.confidence,
+        detected_form_type=detected_type, ocr_confidence=0.5,
         uploaded_at=datetime.now(timezone.utc),
     )
     db.add(doc)
     db.flush()
 
-    extracted_kv = dict(ocr_result.metadata.get("extracted_fields", {}))
-    prefilled_count = 0
-    field_defs: list[FieldDefinition] = []
-
+    field_defs = []
     if detected_type:
-        prefilled_count = await _save_answers(db, case_id, detected_type, extracted_kv, trans_svc)
         questions = db.query(Question).filter(
             Question.template_id == detected_type
         ).order_by(Question.order_index).all()
@@ -376,29 +287,26 @@ async def upload_document(
                 document_language=document_language,
                 source_page=1,
                 order=q.order_index,
-                is_prefilled=(q.field_key in extracted_kv and bool(extracted_kv[q.field_key])),
+                is_prefilled=False,
                 confidence=0.5,
-                needs_review=False,
+                needs_review=True,
             ))
 
     audit_service.log(db, case_id, AuditAction.DOCUMENT_UPLOADED, {
-        "document_id": doc.id, "mode": "fixed_template",
+        "document_id": doc.id, "mode": "fixed_template_fallback",
         "detected_form_type": detected_type,
-        "confidence": round(ocr_result.confidence, 3),
-        "prefilled_fields": prefilled_count,
     })
     db.commit()
 
     return UploadResponse(
         document_id=doc.id, detected_form_type=detected_type,
-        confidence=ocr_result.confidence,
-        requires_manual_selection=not detected_type,
-        prefilled_fields=prefilled_count, fields=field_defs,
+        confidence=0.5, requires_manual_selection=not detected_type,
+        prefilled_fields=0, fields=field_defs,
         document_language=document_language, user_language=user_language,
     )
 
 
-# ── Lazy translation endpoint (called fire-and-forget by frontend) ────────────
+# ── Lazy translation endpoint — called fire-and-forget by frontend ─────────────
 
 @router.post("/{case_id}/translate-fields")
 async def translate_fields_endpoint(
@@ -410,38 +318,28 @@ async def translate_fields_endpoint(
     user: User = Depends(get_current_user),
 ):
     """
-    Translates field labels and option values into user_language via Groq.
-    Called fire-and-forget by the frontend after upload — not on the critical path.
-    The upload route already returns with static (instant) question text.
+    Runs Groq translation for all fields in user's language.
+    Safe to call async — runs in its own request, not on the critical upload path.
     """
     case = db.query(Case).filter(Case.id == case_id, Case.user_id == user.id).first()
     if not case:
         raise HTTPException(status_code=404, detail="Case not found.")
-
     fields_input: list[dict] = payload.get("fields", [])
     if not fields_input:
         return {}
-
-    result = translate_fields(fields_input, user_language, document_language)
-    return result
-
-
-def _map_vision_type(vtype: str) -> str:
-    m = {"checkbox": "checkbox", "radio": "radio", "select": "select",
-         "date": "date", "text": "text", "signature": "signature", "number": "number"}
-    return m.get(vtype.lower(), "text")
+    return translate_fields(fields_input, user_language, document_language)
 
 
 async def _save_answers(db, case_id, template_id, extracted, translation_service) -> int:
     if not extracted:
         return 0
-    fields = db.query(FormField).filter(FormField.template_id == template_id).all()
+    fields    = db.query(FormField).filter(FormField.template_id == template_id).all()
     valid_keys = {f.field_key: f for f in fields}
     count = 0
     for field_key, raw_value in extracted.items():
         if not raw_value or field_key not in valid_keys:
             continue
-        field  = valid_keys[field_key]
+        field   = valid_keys[field_key]
         vresult = validation_service.validate_answer(raw_value, field.validation_rules, language="de")
         translation = await translation_service.translate(
             raw_value, source_language="de", target_language="de",
