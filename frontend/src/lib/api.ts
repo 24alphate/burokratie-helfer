@@ -69,10 +69,11 @@ export const api = {
   },
 
   documents: {
-    upload: async (token: string, caseId: string, file: File): Promise<UploadResponse> => {
+    upload: async (token: string, caseId: string, file: File, userLanguage = "en", documentLanguage = "de"): Promise<UploadResponse> => {
       const form = new FormData();
       form.append("file", file);
-      const res = await fetch(`${BASE}/cases/${caseId}/upload`, {
+      const params = new URLSearchParams({ user_language: userLanguage, document_language: documentLanguage });
+      const res = await fetch(`${BASE}/cases/${caseId}/upload?${params}`, {
         method: "POST",
         headers: { "X-Session-Token": token },
         body: form,

@@ -9,6 +9,7 @@ import { api } from "@/lib/api";
 interface FileDropzoneProps {
   token: string;
   caseId: string;
+  locale: string;
   onUploadComplete: (response: UploadResponse) => void;
   onError: (message: string) => void;
   uploadLabel: string;
@@ -18,6 +19,7 @@ interface FileDropzoneProps {
 export function FileDropzone({
   token,
   caseId,
+  locale,
   onUploadComplete,
   onError,
   uploadLabel,
@@ -33,7 +35,7 @@ export function FileDropzone({
       setFileName(file.name);
       setUploading(true);
       try {
-        const result = await api.documents.upload(token, caseId, file);
+        const result = await api.documents.upload(token, caseId, file, locale);
         onUploadComplete(result);
       } catch (e: unknown) {
         onError(e instanceof Error ? e.message : "Upload failed.");

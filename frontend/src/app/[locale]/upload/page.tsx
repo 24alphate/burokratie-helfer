@@ -93,6 +93,7 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
           <FileDropzone
             token={sessionToken}
             caseId={caseId}
+            locale={locale}
             onUploadComplete={handleUploadComplete}
             onError={setError}
             uploadLabel={t("upload_instruction", locale)}

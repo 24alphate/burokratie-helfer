@@ -153,6 +153,9 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
           isLoading={isLoading}
           validationErrors={submitError ? [submitError] : []}
           submitLabel={SUBMIT[locale] ?? "Next →"}
+          options={nextField.options ?? []}
+          needsReview={nextField.needs_review ?? false}
+          originalLabel={nextField.original_label}
         />
       </main>
     </>

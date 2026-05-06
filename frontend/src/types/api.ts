@@ -15,20 +15,33 @@ export interface CaseRead {
 }
 
 export type CaseStatus =
-  | "created"
-  | "uploaded"
-  | "form_selected"
-  | "in_progress"
-  | "review"
-  | "completed";
+  | "created" | "uploaded" | "form_selected"
+  | "in_progress" | "review" | "completed";
 
+export type InputType =
+  | "text" | "date" | "number" | "yes_no"
+  | "checkbox" | "radio" | "select" | "multiselect" | "signature";
+
+// Option in a radio/select/checkbox field
+export interface FieldOption {
+  value: string;   // value written to the PDF (document language, e.g. "verheiratet")
+  label: string;   // shown to user (user language, e.g. "Marié(e)")
+}
+
+// One field from the uploaded PDF, with translated question text
 export interface FieldDefinition {
-  key: string;
-  question: Record<string, string>;    // {locale: question text}
+  key: string;                    // exact PDF widget name
+  question: Record<string, string>;    // {user_lang: question text}
   explanation: Record<string, string>;
-  input_type: "text" | "date" | "yes_no" | "select";
+  input_type: InputType;
+  options: FieldOption[];         // for radio/select/checkbox
+  original_label: string;         // label as it appears in the document
+  document_language: string;
+  source_page: number;
   order: number;
   is_prefilled: boolean;
+  confidence: number;             // 1.0 = AcroForm ground truth; <1.0 = vision guess
+  needs_review: boolean;
 }
 
 export interface UploadResponse {
@@ -38,8 +51,11 @@ export interface UploadResponse {
   requires_manual_selection: boolean;
   prefilled_fields: number;
   fields: FieldDefinition[];
+  document_language: string;
+  user_language: string;
 }
 
+// Legacy: used by the ALG II fixed-template select inputs
 export interface OptionRead {
   value: string;
   label: Record<string, string>;
@@ -49,7 +65,7 @@ export interface QuestionRead {
   id: string;
   field_key: string;
   order_index: number;
-  input_type: "text" | "date" | "yes_no" | "select";
+  input_type: InputType;
   question_text: Record<string, string>;
   explanation_text: Record<string, string>;
   options: OptionRead[] | null;
