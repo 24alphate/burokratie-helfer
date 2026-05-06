@@ -503,8 +503,6 @@ def extract_flat_fields(pdf_bytes: bytes) -> list[FieldMapEntry]:
 
     return results
 
-    return results
-
 
 # ── Main entry point ───────────────────────────────────────────────────────────
 
