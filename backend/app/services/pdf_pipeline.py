@@ -71,10 +71,12 @@ class FieldMapEntry:
 
 @dataclass
 class ExtractionResult:
-    pdf_type: str                           # "acroform" | "flat" | "scanned" | "unknown"
+    pdf_type: str                           # "acroform" | "flat" | "scanned" | "verified_template" | "unknown"
     fields: list[FieldMapEntry]
     total_pages: int = 0
     error: Optional[str] = None
+    template_id: Optional[str] = None      # set when a verified template matched
+    extraction_source: str = "auto"        # "verified_template" | "acroform" | "pdfplumber" | "auto"
 
 
 @dataclass
@@ -514,33 +516,82 @@ def extract_flat_fields(pdf_bytes: bytes) -> list[FieldMapEntry]:
     return results
 
 
+# ── Full-text extraction for fingerprinting ───────────────────────────────────
+
+def _extract_full_text(pdf_bytes: bytes) -> str:
+    """
+    Extract concatenated text from all pages (up to 15 pages).
+    Used only for template fingerprinting — not for field extraction.
+    """
+    try:
+        import pdfplumber
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            parts = []
+            for page in pdf.pages[:15]:
+                try:
+                    parts.append(page.extract_text() or "")
+                except Exception:
+                    pass
+            return "\n".join(parts)
+    except Exception:
+        return ""
+
+
 # ── Main entry point ───────────────────────────────────────────────────────────
 
 def extract_field_map(pdf_bytes: bytes) -> ExtractionResult:
     """
     Full pipeline entry point.
-    Detects PDF type, runs the appropriate extractor, returns ExtractionResult.
+
+    Order of precedence:
+      1. Verified template fingerprint — if a known form is detected, use the
+         hand-verified field map (confidence=1.0, no regex guessing).
+      2. AcroForm extraction — programmatically fillable PDFs.
+      3. pdfplumber text extraction — flat PDFs with regex heuristics.
     """
-    pdf_type, total_pages = detect_pdf_type(pdf_bytes)
+    # ── Step 1: Check verified templates ──────────────────────────────────────
+    # Lazy import to avoid circular dependency at module load time.
+    from app.services.form_templates import find_matching_template
+
+    full_text   = _extract_full_text(pdf_bytes)
+    _, total_pages = detect_pdf_type(pdf_bytes)   # still need page count
+
+    template = find_matching_template(full_text)
+    if template:
+        return ExtractionResult(
+            pdf_type="verified_template",
+            fields=template.get_field_map(),
+            total_pages=total_pages,
+            template_id=template.template_id,
+            extraction_source="verified_template",
+        )
+
+    # ── Step 2/3: Automatic extraction ────────────────────────────────────────
+    pdf_type, _ = detect_pdf_type(pdf_bytes)
 
     if pdf_type == "acroform":
         fields = extract_acroform_fields(pdf_bytes)
         if not fields:
             fields = extract_flat_fields(pdf_bytes)
-            effective_type = "flat" if fields else "acroform"
+            effective_type  = "flat" if fields else "acroform"
+            extraction_source = "pdfplumber" if fields else "acroform"
         else:
-            effective_type = "acroform"
+            effective_type    = "acroform"
+            extraction_source = "acroform"
     elif pdf_type == "flat":
         fields = extract_flat_fields(pdf_bytes)
-        effective_type = "flat"
+        effective_type    = "flat"
+        extraction_source = "pdfplumber"
     else:
         fields = []
-        effective_type = pdf_type
+        effective_type    = pdf_type
+        extraction_source = "auto"
 
     return ExtractionResult(
         pdf_type=effective_type,
         fields=fields,
         total_pages=total_pages,
+        extraction_source=extraction_source,
     )
 
 

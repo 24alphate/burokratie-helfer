@@ -72,6 +72,14 @@ function DebugPanel({
           </span>
           <span className="text-gray-400">invented_removed</span>
           <span>{report?.invented_questions_removed ?? 0}</span>
+          <span className="text-gray-400">extraction_source</span>
+          <span className={report?.extraction_source === "verified_template" ? "text-green-700 font-bold" : "text-amber-600"}>
+            {report?.extraction_source ?? "—"}
+          </span>
+          {report?.template_id && <>
+            <span className="text-gray-400">template_id</span>
+            <span className="text-green-700">{report.template_id}</span>
+          </>}
           <span className="text-gray-400">source</span>
           <span className={blockedByGuard.length > 0 ? "text-red-600 font-bold" : "text-green-700"}>
             {source}

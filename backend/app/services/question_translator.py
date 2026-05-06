@@ -63,17 +63,21 @@ def translate_fields(
         line += ")"
         field_lines.append(line)
 
-    prompt = f"""You help immigrants fill out official forms. The form is in {source}. The user speaks {target}.
+    prompt = f"""You help immigrants fill out official {source} government forms. The user's language is {target}.
 
-Translate each form field below into {target}. For each field provide:
-- "question": a clear, short question to ask the user in {target}
-- "explanation": one sentence of guidance in {target} (what format is expected, e.g. DD.MM.YYYY for dates)
-- "translated_options": for radio/select/checkbox fields, a dict mapping each original option to its {target} translation
+CRITICAL LANGUAGE RULE: Every single "question" and "explanation" value MUST be written in {target}.
+Do NOT write in English or {source} unless {target} IS English or {source}.
+Write ONLY in {target}.
+
+For each form field provide a JSON object with:
+- "question": a short, clear question in {target} (max 15 words)
+- "explanation": one helpful sentence in {target} about what to enter (format hints, e.g. DD.MM.YYYY for dates)
+- "translated_options": for radio/select/checkbox fields, map each original option value to its {target} translation
 
 Form fields from the {source} document:
 {chr(10).join(field_lines)}
 
-Reply with a single JSON object. Keys are exact field names. Example format:
+Respond with a single JSON object where keys are the exact field names above. Example format (if {target} were French):
 {{
   "Familienstand": {{
     "question": "Quelle est votre situation familiale ?",
@@ -88,10 +92,11 @@ Reply with a single JSON object. Keys are exact field names. Example format:
 }}
 
 Rules:
+- ALL text values must be in {target} — not English, not German
 - Never invent options that don't exist in the original
-- Use formal/polite register
-- Keep questions concise (under 15 words)
-- If the field type is 'signature', question = "Signez ici" (equivalent in {target})"""
+- Use formal/polite register appropriate for government forms
+- If the field type is 'signature', question = the equivalent of "Please sign here" in {target}
+- If the field type is 'checkbox', question = the equivalent of "Do you wish to select this option?" in {target}"""
 
     try:
         resp = client.chat.completions.create(

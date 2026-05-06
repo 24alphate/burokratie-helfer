@@ -247,6 +247,8 @@ async def process_pdf(
         coverage_rate=pipeline_report.coverage_rate,
         grounding_rate=pipeline_report.grounding_rate,
         grounding_ok=pipeline_report.grounding_ok,
+        template_id=extraction.template_id,
+        extraction_source=extraction.extraction_source,
     )
 
     shown = [d for d in field_defs if d.show_question]

@@ -42,6 +42,9 @@ class AnalysisReport(BaseModel):
     coverage_rate: str              # questions_shown / field_count
     grounding_rate: str             # always "100%"
     grounding_ok: bool              # always True when grounding_rate == "100%"
+    # Template metadata — set when a verified template was used
+    template_id: Optional[str] = None
+    extraction_source: str = "auto"  # "verified_template" | "acroform" | "pdfplumber" | "auto"
 
 
 class UploadResponse(BaseModel):

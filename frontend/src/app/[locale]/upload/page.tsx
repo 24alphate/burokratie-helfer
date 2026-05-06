@@ -349,15 +349,27 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
                 </div>
                 <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 text-sm">
                   <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-gray-600 font-mono text-xs">
-                    <span>pdf_type</span>        <span>{report.pdf_type}</span>
-                    <span>pages</span>           <span>{report.total_pages}</span>
-                    <span>fields extracted</span><span className="text-green-700">{report.field_count}</span>
-                    <span>questions shown</span> <span className="text-green-700">{report.questions_shown}</span>
+                    <span>pdf_type</span>          <span className={report.pdf_type === "verified_template" ? "text-green-700 font-bold" : ""}>{report.pdf_type}</span>
+                    <span>extraction_source</span>  <span className={report.extraction_source === "verified_template" ? "text-green-700 font-bold" : "text-amber-600"}>{report.extraction_source ?? "auto"}</span>
+                    {report.template_id && <><span>template_id</span><span className="text-green-700">{report.template_id}</span></>}
+                    <span>pages</span>             <span>{report.total_pages}</span>
+                    <span>fields extracted</span>  <span className="text-green-700">{report.field_count}</span>
+                    <span>questions shown</span>   <span className="text-green-700">{report.questions_shown}</span>
                     {report.questions_blocked > 0 && <><span>blocked (low conf)</span><span className="text-amber-600">{report.questions_blocked}</span></>}
                     {report.invented_questions_removed > 0 && <><span>invented removed</span><span className="text-red-600">{report.invented_questions_removed}</span></>}
-                    <span>grounding rate</span>  <span className="text-green-700 font-bold">{report.grounding_rate}</span>
-                    <span>AI used</span>         <span className={aiUsed ? "text-blue-600" : "text-orange-600"}>{aiUsed ? "yes (Groq)" : "no (raw labels)"}</span>
+                    <span>grounding rate</span>    <span className="text-green-700 font-bold">{report.grounding_rate}</span>
+                    <span>AI used</span>           <span className={aiUsed ? "text-blue-600" : "text-orange-600"}>{aiUsed ? "yes (Groq)" : "no (raw labels)"}</span>
                   </div>
+                  {report.extraction_source === "verified_template" && (
+                    <p className="mt-3 text-xs text-green-700 bg-green-50 border border-green-200 rounded px-2 py-1.5">
+                      ✅ Verified template matched — all {report.field_count} fields are hand-verified, confidence 1.0
+                    </p>
+                  )}
+                  {report.extraction_source !== "verified_template" && (
+                    <p className="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                      ⚠ Experimental extraction ({report.extraction_source}) — accuracy not guaranteed for all fields
+                    </p>
+                  )}
                 </div>
 
                 {/* Action buttons */}

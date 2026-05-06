@@ -61,6 +61,9 @@ export interface AnalysisReport {
   coverage_rate: string;             // questions_shown / field_count
   grounding_rate: string;            // always "100%"
   grounding_ok: boolean;             // always true
+  // Template metadata
+  template_id: string | null;        // set when a verified template matched
+  extraction_source: string;         // "verified_template" | "acroform" | "pdfplumber" | "auto"
 }
 
 export interface UploadResponse {
