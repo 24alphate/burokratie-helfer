@@ -17,7 +17,7 @@ _DEFAULT_GENERATED = f"{_TMP}/generated" if IS_VERCEL else str(BASE_DIR / "gener
 
 class Settings(BaseSettings):
     database_url: str = _DEFAULT_DB
-    ocr_backend: str = "smart"
+    ocr_backend: str = "mock"
     translation_backend: str = "mock"
     upload_dir: str = _DEFAULT_UPLOAD
     generated_dir: str = _DEFAULT_GENERATED
