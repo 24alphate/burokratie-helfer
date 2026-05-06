@@ -327,26 +327,88 @@ def extract_acroform_fields(pdf_bytes: bytes) -> list[FieldMapEntry]:
 
 # ── Flat PDF extraction (pdfplumber text + layout) ────────────────────────────
 
+# Known German government form field patterns (calibrated on real Jobcenter forms).
+# Every pattern is anchored to something actually IN the PDF — no topic-based invention.
+
+_RE_BLANK_AFTER_COLON   = re.compile(r"^(.{2,80}):\s*_{3,}")          # "Label: ___"
+_RE_BLANKS_THEN_UNIT    = re.compile(r"^_{3,}\s+(.{2,60})")           # "_____ EUR ..."
+_RE_UNICODE_CHECKBOX    = re.compile(r"(□|☐|\[\s*\]|\(\s*\))\s*(.{2,60})")  # □ Option
+_RE_LETTER_CHECKBOX     = re.compile(r"^([A-Z])\s+(Leistung\w+\s.{5,80})")  # A Leistungen für …
+_RE_ORT_DATUM           = re.compile(r"Ort.{0,5}Datum", re.IGNORECASE)        # Ort/Datum …
+_RE_UNTERSCHRIFT        = re.compile(r"Unterschrift", re.IGNORECASE)           # Unterschrift …
+_RE_STANDALONE_LABEL    = re.compile(r"^([A-ZÄÖÜ][^:!?)]{2,120}[^:!?).])$")  # "Name, Vorname"
+_RE_BETRAG_KM           = re.compile(r"betr[äa]gt\s+km", re.IGNORECASE)  # "beträgt km."
+
+# Words that are structural text, not field labels — never generate a question for these
+_SKIP_PHRASES = {
+    "hinweis", "bitte", "gemeinschaftlichen", "anspruchsberechtigte",
+    "ich versichere", "ich bin damit", "auf ihre rechte", "rechtsgrundlage",
+    "hierf", "der/die beauftragte", "die daten", "impressum", "datenschutz",
+    "jobcenter", "bundesagentur", "(bitte", "anlage",
+    "freizeiten", "jugendamt", "erhoben", "sgb", "bkgg", "datenschutz-grundverordnung",
+    "sozialgeheimnis", "sozialgesetz", "verarbeitet", "speicher", "widerrufen",
+    "einverstanden", "leistungsanbieter", "pluxee",
+}
+
+
+def _skip(label: str) -> bool:
+    lo = label.lower().strip()
+    if len(lo) < 3 or len(lo) > 120:
+        return True
+    for phrase in _SKIP_PHRASES:
+        if phrase in lo:
+            return True
+    # Skip lines that are mostly punctuation/numbers
+    if re.match(r'^[\d\s\.,\-\(\)%€/]+$', lo):
+        return True
+    return False
+
+
+def _make_fid(label: str) -> str:
+    """Stable field_id from a label string."""
+    return re.sub(r"[^a-z0-9]+", "_", label.lower().strip())[:80].strip("_")
+
+
 def extract_flat_fields(pdf_bytes: bytes) -> list[FieldMapEntry]:
     """
-    Best-effort field detection for non-fillable PDFs with readable text.
-    Uses pdfplumber to find label patterns (blanks, colons, underscores)
-    and checkbox symbols (□, ☐, [ ]).
+    Field detection for flat (non-fillable) PDFs using pdfplumber text extraction.
 
-    Returns FieldMapEntry with confidence=0.8 and source="pdfplumber".
+    Handles German government form patterns:
+    - "Label: ___..." (blanks after colon)
+    - "_____ EUR / km" (leading underscores with unit)
+    - "□ Option" / "A Leistungen für …" (checkbox-style options)
+    - "Ort/Datum", "Unterschrift" (signature areas)
+    - Standalone title-case label lines ("Name, Vorname", "Postanschrift")
+
+    Every returned field_id is grounded in a real line of text from the PDF.
+    No fields are invented from the topic of the document.
+    confidence = 0.75 (below the needs_review threshold of 0.7? No — 0.75 > 0.7,
+    but source="pdfplumber" triggers needs_review=True regardless).
     """
     try:
-        import pdfplumber  # lazy import — not in top-level to avoid startup crash
+        import pdfplumber
     except ImportError:
         return []
 
     results: list[FieldMapEntry] = []
     seen: set[str] = set()
+    letter_checkbox_options: list[str] = []  # collect A,B,C... options for a group
+    letter_checkbox_group_started = False
 
-    # Patterns that indicate a fillable field
-    _blank_after_colon = re.compile(r"(.{3,60}):\s*_{3,}")
-    _blank_line_after   = re.compile(r"(.{3,60}):?\s*$")
-    _checkbox           = re.compile(r"(□|☐|\[\s*\]|\( \))\s*(.{2,40})")
+    def _add(label: str, ftype: str, page: int, opts: Optional[list[str]] = None) -> None:
+        fid = _make_fid(label)
+        if not fid or fid in seen or _skip(label):
+            return
+        seen.add(fid)
+        results.append(FieldMapEntry(
+            field_id=fid,
+            original_label=label.strip(),
+            field_type=ftype,
+            source_page=page,
+            options=opts or [],
+            confidence=0.75,
+            source="pdfplumber",
+        ))
 
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
@@ -356,47 +418,90 @@ def extract_flat_fields(pdf_bytes: bytes) -> list[FieldMapEntry]:
                 except Exception:
                     continue
 
-                for line in text.split("\n"):
-                    line = line.strip()
-                    if not line:
+                lines = text.split("\n")
+                for i, raw_line in enumerate(lines):
+                    line = raw_line.strip()
+                    if not line or len(results) >= MAX_FIELDS:
                         continue
 
-                    # Blank after colon: "Vorname: ___"
-                    m = _blank_after_colon.search(line)
+                    # 1. "Label: ___" — explicit blank after colon
+                    m = _RE_BLANK_AFTER_COLON.match(line)
                     if m:
-                        label = m.group(1).strip()
-                        fid = re.sub(r"\W+", "_", label.lower())[:60]
-                        if fid and fid not in seen:
-                            seen.add(fid)
-                            results.append(FieldMapEntry(
-                                field_id=fid,
-                                original_label=label,
-                                field_type="text",
-                                source_page=page_num,
-                                confidence=0.8,
-                                source="pdfplumber",
-                            ))
+                        _add(m.group(1).strip(), "text", page_num)
                         continue
 
-                    # Checkbox symbol: "□ ledig  □ verheiratet"
-                    for m in _checkbox.finditer(line):
-                        label = m.group(2).strip()
-                        fid = re.sub(r"\W+", "_", label.lower())[:60]
-                        if fid and fid not in seen:
-                            seen.add(fid)
-                            results.append(FieldMapEntry(
-                                field_id=fid,
-                                original_label=label,
-                                field_type="checkbox",
-                                source_page=page_num,
-                                confidence=0.8,
-                                source="pdfplumber",
-                            ))
+                    # 2. "_____ EUR / km" — fill-in amount or distance
+                    m = _RE_BLANKS_THEN_UNIT.match(line)
+                    if m:
+                        unit_label = m.group(1).strip()
+                        _add(unit_label, "number", page_num)
+                        continue
 
-                if len(results) >= MAX_FIELDS:
-                    break
+                    # 3. "beträgt km." — distance fill-in
+                    if _RE_BETRAG_KM.search(line):
+                        _add("Strecke_km", "number", page_num)
+                        continue
+
+                    # 4. "□ Option" or "☐ Option" — unicode checkbox
+                    if _RE_UNICODE_CHECKBOX.search(line):
+                        for m in _RE_UNICODE_CHECKBOX.finditer(line):
+                            _add(m.group(2).strip(), "checkbox", page_num)
+                        continue
+
+                    # 5. "A Leistungen für …" — letter-prefixed checkbox group
+                    m = _RE_LETTER_CHECKBOX.match(line)
+                    if m:
+                        full_label = m.group(0)
+                        # Truncate at parenthesis (explanatory text starts there)
+                        short_label = re.split(r'\(', full_label, 1)[0].strip()
+                        letter_prefix = m.group(1)
+                        option_label = f"{letter_prefix}: {short_label[2:].strip()}"[:100]
+                        letter_checkbox_options.append(option_label)
+                        letter_checkbox_group_started = True
+                        continue
+
+                    # 6. "Ort/Datum" — date+place signature area
+                    if _RE_ORT_DATUM.search(line):
+                        _add("Ort_Datum", "text", page_num)
+                        continue
+
+                    # 7. "Unterschrift …" — signature line
+                    if _RE_UNTERSCHRIFT.search(line):
+                        _add("Unterschrift", "signature", page_num)
+                        continue
+
+                    # 8. Standalone title-case label line (e.g. "Name, Vorname")
+                    if _RE_STANDALONE_LABEL.match(line) and not _skip(line):
+                        # Only treat as a label if the next non-empty line looks like
+                        # another label or is blank (i.e. this line IS the field)
+                        next_lines = [l.strip() for l in lines[i+1:i+3] if l.strip()]
+                        next_is_label = (
+                            not next_lines
+                            or _RE_STANDALONE_LABEL.match(next_lines[0])
+                            or len(next_lines[0]) < 6
+                        )
+                        if next_is_label:
+                            _add(line, "text", page_num)
+
     except Exception:
         pass
+
+    # Flush letter-checkbox group as a single multi-select radio group
+    if letter_checkbox_options and len(letter_checkbox_options) >= 2:
+        fid = "leistungsart_auswahl"
+        if fid not in seen:
+            seen.add(fid)
+            results.append(FieldMapEntry(
+                field_id=fid,
+                original_label="Beantragte Leistung (A–G)",
+                field_type="multiselect",
+                source_page=1,
+                options=letter_checkbox_options,
+                confidence=0.75,
+                source="pdfplumber",
+            ))
+
+    return results
 
     return results
 
