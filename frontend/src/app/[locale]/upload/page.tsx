@@ -158,12 +158,13 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
     setLocale, setFields, setPdfToken,
     beginNewUpload,
   } = useCaseStore();
-  const [mounted, setMounted]       = useState(false);
-  const [stage, setStage]           = useState<Stage>("idle");
-  const [error, setError]           = useState<string | null>(null);
-  const [apiWarning, setApiWarning] = useState<string | null>(null);
-  const [report, setReport]         = useState<AnalysisReport | null>(null);
-  const [noAiMode, setNoAiMode]     = useState(false);
+  const [mounted, setMounted]         = useState(false);
+  const [stage, setStage]             = useState<Stage>("idle");
+  const [inputMode, setInputMode]     = useState<"choose" | "upload">("choose");
+  const [error, setError]             = useState<string | null>(null);
+  const [apiWarning, setApiWarning]   = useState<string | null>(null);
+  const [report, setReport]           = useState<AnalysisReport | null>(null);
+  const [noAiMode, setNoAiMode]       = useState(false);
 
   // Diagnostic data from last upload
   const [rawFields, setRawFields]         = useState<RawFieldEntry[]>([]);
@@ -316,14 +317,57 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
           </div>
         )}
 
-        {stage === "idle" && (
-          <FileDropzone
-            onFileSelected={handleFileSelected}
-            onError={(msg) => { setError(msg); setStage("error"); }}
-            isProcessing={false}
-            uploadLabel={t("instr", locale)}
-            supportedLabel={t("supported", locale)}
-          />
+        {/* Mode selector — shown first in idle state */}
+        {stage === "idle" && inputMode === "choose" && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <button
+              onClick={() => setInputMode("upload")}
+              className="flex flex-col items-start gap-3 p-6 bg-white border-2 border-gray-200 rounded-2xl hover:border-brand-400 hover:bg-brand-50 transition-all text-left group"
+            >
+              <span className="text-3xl">📄</span>
+              <div>
+                <p className="text-lg font-semibold text-gray-900 group-hover:text-brand-700">
+                  {locale === "de" ? "PDF hochladen" : locale === "ar" ? "رفع ملف PDF" : locale === "tr" ? "PDF yükle" : "Upload PDF"}
+                </p>
+                <p className="text-sm text-gray-500 mt-1">
+                  {locale === "de" ? "Offizielles PDF-Formular von Ihrem Gerät hochladen." : locale === "ar" ? "ارفع نموذج PDF الرسمي من جهازك." : locale === "tr" ? "Cihazınızdan resmi PDF formu yükleyin." : "Upload an official PDF form from your device."}
+                </p>
+              </div>
+            </button>
+
+            <button
+              onClick={() => router.push(`/${locale}/scan`)}
+              className="flex flex-col items-start gap-3 p-6 bg-white border-2 border-gray-200 rounded-2xl hover:border-brand-400 hover:bg-brand-50 transition-all text-left group"
+            >
+              <span className="text-3xl">📷</span>
+              <div>
+                <p className="text-lg font-semibold text-gray-900 group-hover:text-brand-700">
+                  {locale === "de" ? "Dokument scannen" : locale === "ar" ? "مسح المستند" : locale === "tr" ? "Belge tara" : "Scan document"}
+                </p>
+                <p className="text-sm text-gray-500 mt-1">
+                  {locale === "de" ? "Papierformular mit der Kamera Seite für Seite scannen." : locale === "ar" ? "امسح نموذجًا ورقيًا بالكاميرا صفحةً بصفحة." : locale === "tr" ? "Kameranızla kağıt formu sayfa sayfa tarayın." : "Use your camera to scan a paper form page by page."}
+                </p>
+              </div>
+            </button>
+          </div>
+        )}
+
+        {stage === "idle" && inputMode === "upload" && (
+          <>
+            <button
+              onClick={() => setInputMode("choose")}
+              className="mb-4 text-sm text-gray-400 hover:text-gray-600 transition-colors"
+            >
+              ← {locale === "de" ? "Zurück" : locale === "ar" ? "رجوع" : locale === "tr" ? "Geri" : "Back"}
+            </button>
+            <FileDropzone
+              onFileSelected={handleFileSelected}
+              onError={(msg) => { setError(msg); setStage("error"); }}
+              isProcessing={false}
+              uploadLabel={t("instr", locale)}
+              supportedLabel={t("supported", locale)}
+            />
+          </>
         )}
 
         {stage === "processing" && (
