@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import re
 import uuid
 from datetime import datetime, timezone
@@ -26,6 +27,8 @@ from typing import Optional
 import pypdf
 from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, Request, UploadFile
 from sqlalchemy.orm import Session
+
+log = logging.getLogger("burokratie.upload")
 
 from app.api.deps import get_db, get_current_user
 from app.config import settings
@@ -256,14 +259,22 @@ async def upload_document(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    log.info("upload start case=%s filename=%s content_type=%s",
+             case_id, file.filename, file.content_type)
+
     case = db.query(Case).filter(Case.id == case_id, Case.user_id == user.id).first()
     if not case:
         raise HTTPException(status_code=404, detail="Case not found.")
 
     content = await file.read()
+    size_kb = len(content) // 1024
+    log.info("upload file read case=%s size_kb=%d", case_id, size_kb)
+
     if len(content) > MAX_SIZE_BYTES:
+        log.warning("upload rejected — file too large case=%s size_kb=%d limit_mb=%d",
+                    case_id, size_kb, settings.max_upload_size_mb)
         raise HTTPException(status_code=413,
-                            detail=f"File too large. Max {settings.max_upload_size_mb}MB.")
+                            detail=f"File too large ({size_kb} KB). Max {settings.max_upload_size_mb} MB.")
 
     upload_dir = Path(settings.upload_dir)
     upload_dir.mkdir(parents=True, exist_ok=True)
@@ -271,6 +282,7 @@ async def upload_document(
     suffix  = Path(file.filename or "upload.pdf").suffix or ".pdf"
     dest    = upload_dir / f"{file_id}{suffix}"
     dest.write_bytes(content)
+    log.info("upload saved case=%s path=%s", case_id, dest)
 
     # Auto-select the fixed template when there is exactly one (no OCR needed)
     detected_type: Optional[str] = None
@@ -332,6 +344,8 @@ async def upload_document(
     })
     db.commit()
 
+    log.info("upload complete case=%s doc_id=%s template=%s fields=%d",
+             case_id, doc.id, detected_type, len(field_defs))
     return UploadResponse(
         document_id=doc.id, detected_form_type=detected_type,
         confidence=0.5, requires_manual_selection=not detected_type,
@@ -364,6 +378,7 @@ async def extract_pdf_fields(
     - Choice field options have translated labels via Groq (when available).
     - confidence=1.0 for AcroForm widgets (ground truth).
     """
+    log.info("extract-pdf-fields start case=%s lang=%s", case_id, user_language)
     case = db.query(Case).filter(Case.id == case_id, Case.user_id == user.id).first()
     if not case:
         raise HTTPException(status_code=404, detail="Case not found.")
@@ -375,18 +390,23 @@ async def extract_pdf_fields(
         .first()
     )
     if not doc or not doc.storage_path:
+        log.warning("extract-pdf-fields no document found case=%s", case_id)
         raise HTTPException(status_code=404, detail="No uploaded document found.")
 
     storage_path = Path(doc.storage_path)
     if not storage_path.exists():
+        log.warning("extract-pdf-fields file missing case=%s path=%s", case_id, storage_path)
         raise HTTPException(status_code=404, detail="Uploaded file not found on disk.")
 
     pdf_bytes = storage_path.read_bytes()
     if pdf_bytes[:4] != b"%PDF":
+        log.warning("extract-pdf-fields not a PDF case=%s", case_id)
         raise HTTPException(status_code=400, detail="Uploaded file is not a PDF.")
 
     extracted_fields = _extract_acroform_fields(pdf_bytes)
+    log.info("extract-pdf-fields extracted case=%s count=%d", case_id, len(extracted_fields))
     if not extracted_fields:
+        log.info("extract-pdf-fields no AcroForm fields case=%s — 422", case_id)
         raise HTTPException(status_code=422, detail="No AcroForm fields found in PDF.")
 
     # Translate questions + option labels via Groq (this endpoint has no time pressure)

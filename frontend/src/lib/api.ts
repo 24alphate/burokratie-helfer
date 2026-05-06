@@ -10,11 +10,65 @@ import {
   UploadResponse,
 } from "@/types/api";
 
-// In dev: uses Next.js proxy rewrite (/api → localhost:8000)
-// In production: NEXT_PUBLIC_API_URL points directly to the Railway backend
+// In dev (no NEXT_PUBLIC_API_URL): relative /api/v1 + Next.js rewrite → localhost:8000
+// In production: NEXT_PUBLIC_API_URL must be set to the backend Vercel URL
+//   → Go to Vercel → frontend project → Settings → Environment Variables
+//   → Add: NEXT_PUBLIC_API_URL = https://<your-backend-project>.vercel.app
 const BASE = process.env.NEXT_PUBLIC_API_URL
   ? `${process.env.NEXT_PUBLIC_API_URL}/api/v1`
   : "/api/v1";
+
+// Exported so other modules can show the resolved URL in diagnostics
+export const API_BASE = BASE;
+
+/**
+ * Returns true when the JS environment is a browser AND the current hostname
+ * is NOT localhost — i.e. we're in deployed production.
+ * Used to detect the "NEXT_PUBLIC_API_URL not set" misconfiguration early.
+ */
+export function isProductionWithoutApiUrl(): boolean {
+  if (typeof window === "undefined") return false;
+  const host = window.location.hostname;
+  const isLocal = host === "localhost" || host === "127.0.0.1";
+  const hasApiUrl = Boolean(process.env.NEXT_PUBLIC_API_URL);
+  return !isLocal && !hasApiUrl;
+}
+
+/** Classify a fetch() rejection or HTTP error into a human-readable stage. */
+function classifyError(err: unknown, status?: number): ApiError {
+  // Network-level failure (server unreachable, CORS, no internet)
+  if (err instanceof TypeError && /failed to fetch|network/i.test(err.message)) {
+    const configured = process.env.NEXT_PUBLIC_API_URL;
+    if (!configured) {
+      return new ApiError(
+        "Cannot reach the backend API. " +
+        "Set NEXT_PUBLIC_API_URL in your Vercel frontend environment variables " +
+        "and redeploy.",
+        0
+      );
+    }
+    return new ApiError(
+      `Cannot reach API at ${configured}. ` +
+        "Check that the backend is deployed and CORS allows this origin.",
+      0
+    );
+  }
+
+  // HTTP errors with known status codes
+  if (status === 413) return new ApiError("File is too large. Max 10 MB.", 413);
+  if (status === 404) return new ApiError("Upload endpoint not found (404). Check backend deployment.", 404);
+  if (status === 401 || status === 403) return new ApiError("Session expired. Please refresh and start again.", status);
+  if (status === 422) return new ApiError("PDF has no detectable fillable fields — you can still answer questions manually.", 422);
+  if (status && status >= 500)
+    return new ApiError(
+      "The backend encountered an error while processing the file. " +
+        "Check backend logs for details.",
+      status
+    );
+
+  if (err instanceof ApiError) return err;
+  return new ApiError(String(err), status ?? 0);
+}
 
 async function request<T>(
   path: string,
@@ -29,10 +83,19 @@ async function request<T>(
     headers["Content-Type"] = "application/json";
   }
 
-  const res = await fetch(`${BASE}${path}`, { ...fetchOptions, headers });
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}${path}`, { ...fetchOptions, headers });
+  } catch (err) {
+    console.error("[api] Network error on", path, err);
+    throw classifyError(err);
+  }
+
   if (!res.ok) {
-    const detail = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new ApiError(detail.detail ?? "Request failed", res.status);
+    const body = await res.json().catch(() => ({ detail: res.statusText }));
+    const msg = body?.detail ?? body?.message ?? "Request failed";
+    console.error("[api] HTTP", res.status, path, msg);
+    throw classifyError(new ApiError(msg, res.status), res.status);
   }
   return res.json();
 }
@@ -94,18 +157,39 @@ export const api = {
         body: JSON.stringify({}),
       }),
 
-    upload: async (token: string, caseId: string, file: File, userLanguage = "en", documentLanguage = "de"): Promise<UploadResponse> => {
+    upload: async (
+      token: string,
+      caseId: string,
+      file: File,
+      userLanguage = "en",
+      documentLanguage = "de",
+    ): Promise<UploadResponse> => {
+      // IMPORTANT: Do NOT set Content-Type manually for FormData.
+      // The browser must set it so that the multipart boundary is included.
       const form = new FormData();
-      form.append("file", file);
+      form.append("file", file);   // backend expects field named "file"
       const params = new URLSearchParams({ user_language: userLanguage, document_language: documentLanguage });
-      const res = await fetch(`${BASE}/cases/${caseId}/upload?${params}`, {
-        method: "POST",
-        headers: { "X-Session-Token": token },
-        body: form,
-      });
+      const url = `${BASE}/cases/${caseId}/upload?${params}`;
+
+      console.log("[upload] POST", url, "file:", file.name, file.size, "bytes");
+
+      let res: Response;
+      try {
+        res = await fetch(url, {
+          method: "POST",
+          headers: { "X-Session-Token": token },
+          body: form,
+        });
+      } catch (err) {
+        console.error("[upload] Network error:", err);
+        throw classifyError(err);
+      }
+
       if (!res.ok) {
-        const detail = await res.json().catch(() => ({ detail: res.statusText }));
-        throw new ApiError(detail.detail ?? "Upload failed", res.status);
+        const body = await res.json().catch(() => ({ detail: res.statusText }));
+        const msg = body?.detail ?? body?.message ?? "Upload failed";
+        console.error("[upload] HTTP", res.status, msg, "body:", body);
+        throw classifyError(new ApiError(msg, res.status), res.status);
       }
       return res.json();
     },

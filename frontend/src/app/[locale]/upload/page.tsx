@@ -7,16 +7,16 @@ import { StepProgress } from "@/components/layout/StepProgress";
 import { FileDropzone } from "@/components/upload/FileDropzone";
 import { FormTypeSelector } from "@/components/upload/FormTypeSelector";
 import { useCaseStore } from "@/store/caseStore";
-import { api } from "@/lib/api";
+import { api, API_BASE, isProductionWithoutApiUrl } from "@/lib/api";
 import { UploadResponse } from "@/types/api";
 
 const T: Record<string, Record<string, string>> = {
-  upload_title: { en: "Upload any fillable PDF form", ar: "ارفع أي نموذج PDF قابل للتعبئة", tr: "Herhangi bir doldurulabilir PDF yükleyin", de: "Beliebiges PDF-Formular hochladen" },
+  upload_title:       { en: "Upload any fillable PDF form", ar: "ارفع أي نموذج PDF قابل للتعبئة", tr: "Herhangi bir doldurulabilir PDF yükleyin", de: "Beliebiges PDF-Formular hochladen" },
   upload_instruction: { en: "Drag & drop any fillable PDF here — fields are read directly from your document.", ar: "اسحب أي نموذج PDF قابل للتعبئة هنا — تُقرأ الحقول مباشرة من مستندك.", tr: "Doldurulabilir herhangi bir PDF'yi buraya sürükleyin — alanlar doğrudan belgenizden okunur.", de: "Beliebiges ausfüllbares PDF hier ablegen — Felder werden direkt aus dem Dokument gelesen." },
-  supported: { en: "Any fillable PDF (government forms, contracts, applications…)", ar: "أي نموذج PDF قابل للتعبئة (نماذج حكومية، عقود، طلبات...)", tr: "Her doldurulabilir PDF (resmi formlar, sözleşmeler, başvurular…)", de: "Jedes ausfüllbare PDF (Behördenformulare, Verträge, Anträge…)" },
-  detecting: { en: "Detecting form type...", ar: "جارٍ التعرف على الاستمارة...", tr: "Form türü tespit ediliyor...", de: "Formular wird erkannt..." },
-  confirm: { en: "Confirm & Continue", ar: "تأكيد ومتابعة", tr: "Onayla ve Devam Et", de: "Bestätigen & Weiter" },
-  select_prompt: { en: "Please select your form type:", ar: "يرجى تحديد نوع الاستمارة:", tr: "Lütfen form türünüzü seçin:", de: "Bitte Formulartyp wählen:" },
+  supported:          { en: "Any fillable PDF (government forms, contracts, applications…)", ar: "أي نموذج PDF قابل للتعبئة (نماذج حكومية، عقود، طلبات...)", tr: "Her doldurulabilir PDF (resmi formlar, sözleşmeler, başvurular…)", de: "Jedes ausfüllbare PDF (Behördenformulare, Verträge, Anträge…)" },
+  detecting:          { en: "Detecting form type...", ar: "جارٍ التعرف على الاستمارة...", tr: "Form türü tespit ediliyor...", de: "Formular wird erkannt..." },
+  confirm:            { en: "Confirm & Continue", ar: "تأكيد ومتابعة", tr: "Onayla ve Devam Et", de: "Bestätigen & Weiter" },
+  select_prompt:      { en: "Please select your form type:", ar: "يرجى تحديد نوع الاستمارة:", tr: "Lütfen form türünüzü seçin:", de: "Bitte Formulartyp wählen:" },
 };
 
 function t(key: string, locale: string): string {
@@ -27,10 +27,11 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
   const { locale } = params;
   const router = useRouter();
   const { sessionToken, caseId, setLocale, setFields, mergeTranslations } = useCaseStore();
-  const [mounted, setMounted] = useState(false);
+  const [mounted, setMounted]           = useState(false);
   const [uploadResult, setUploadResult] = useState<UploadResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [confirming, setConfirming] = useState(false);
+  const [error, setError]               = useState<string | null>(null);
+  const [apiWarning, setApiWarning]     = useState<string | null>(null);
+  const [confirming, setConfirming]     = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -43,6 +44,17 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
     }
   }, [mounted, sessionToken, caseId, router]);
 
+  // Warn early when NEXT_PUBLIC_API_URL is missing in production
+  useEffect(() => {
+    if (!mounted) return;
+    if (isProductionWithoutApiUrl()) {
+      setApiWarning(
+        `API not configured. Set NEXT_PUBLIC_API_URL in your Vercel frontend environment variables ` +
+        `and redeploy. Currently calling: ${API_BASE}`
+      );
+    }
+  }, [mounted]);
+
   async function handleConfirm(templateId: string) {
     if (!sessionToken || !caseId) return;
     setConfirming(true);
@@ -50,7 +62,7 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
       await api.cases.setFormType(sessionToken, caseId, templateId);
       router.push(`/${locale}/questions`);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Failed.");
+      setError(e instanceof Error ? e.message : "Failed to confirm form type.");
     } finally {
       setConfirming(false);
     }
@@ -63,16 +75,16 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
     setUploadResult(result);
 
     if (sessionToken && caseId) {
-      // Fire-and-forget: extract real AcroForm fields from the PDF.
-      // Upload returned immediately with generic fixed-template fields;
-      // this replaces them with the PDF's actual field list once ready.
+      // Fire-and-forget: extract real AcroForm fields from the PDF in background.
+      // Upload already returned with generic fixed-template fields;
+      // this replaces them with the actual PDF fields once extraction completes.
       api.documents
         .extractPdfFields(sessionToken, caseId, locale)
         .then((extracted) => {
           if (extracted.fields?.length) {
             setFields(extracted.fields);
           }
-          // Also translate into user's language if needed
+          // Translate option labels if locale is not natively supported
           if (!["en", "de", "ar", "tr"].includes(locale) && extracted.fields?.length) {
             const fieldsForTranslation = extracted.fields.map((f) => ({
               field_name: f.key,
@@ -85,7 +97,10 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
               .catch(() => {});
           }
         })
-        .catch(() => {/* PDF had no AcroForm — fixed template fields stay */});
+        .catch(() => {
+          // PDF had no AcroForm fields — fixed template questions stay
+          // This is not an error from the user's perspective
+        });
     }
 
     if (!result.requires_manual_selection && result.detected_form_type) {
@@ -113,7 +128,19 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
         <StepProgress currentStep={0} />
         <h1 className="text-2xl font-bold text-gray-900 mb-6">{t("upload_title", locale)}</h1>
 
-        {error && <p className="text-red-600 text-sm mb-4 p-3 bg-red-50 rounded-lg">{error}</p>}
+        {/* Misconfiguration warning — shown in production when API URL is missing */}
+        {apiWarning && (
+          <div className="mb-4 p-3 bg-amber-50 border border-amber-300 rounded-lg text-amber-800 text-sm font-mono break-all">
+            ⚙ {apiWarning}
+          </div>
+        )}
+
+        {/* Upload / API error */}
+        {error && (
+          <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+            {error}
+          </div>
+        )}
 
         {!uploadResult ? (
           <FileDropzone
