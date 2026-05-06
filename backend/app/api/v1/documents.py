@@ -13,6 +13,7 @@ POST /cases/{id}/translate-fields endpoint handles Groq translation lazily
 """
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import re
@@ -256,9 +257,15 @@ async def upload_document(
             document_language=document_language, user_language=user_language,
         )
 
-    # ── Path B: scanned/flat — vision field detection (may use Groq) ─────────
+    # ── Path B: scanned/flat — vision field detection with hard timeout ────────
+    # Capped at 5 s so Vercel's 10 s limit is never exceeded.
     ocr_svc = request.app.state.ocr_service
-    vision_fields: list[dict] = await ocr_svc.detect_all_fields(content)
+    try:
+        vision_fields: list[dict] = await asyncio.wait_for(
+            ocr_svc.detect_all_fields(content), timeout=5.0
+        )
+    except (asyncio.TimeoutError, Exception):
+        vision_fields = []
 
     if vision_fields:
         translations = static_fallback(
@@ -311,8 +318,13 @@ async def upload_document(
             document_language=document_language, user_language=user_language,
         )
 
-    # ── Path C: fixed ALG II template fallback ────────────────────────────────
-    ocr_result   = await ocr_svc.extract_text(content)
+    # ── Path C: fixed ALG II template fallback — also timeout-guarded ───────────
+    from app.services.ocr.base import OCRResult as _OCRResult
+    try:
+        ocr_result = await asyncio.wait_for(ocr_svc.extract_text(content), timeout=5.0)
+    except (asyncio.TimeoutError, Exception):
+        ocr_result = _OCRResult(raw_text="", confidence=0.0,
+                                detected_form_type=None, page_count=1)
     detected_type = await ocr_svc.detect_form_type(ocr_result)
 
     if not detected_type or ocr_result.confidence < 0.7:
@@ -387,10 +399,6 @@ async def upload_document(
 
 
 # ── Lazy translation endpoint (called fire-and-forget by frontend) ────────────
-
-class TranslateRequest(Body):
-    pass
-
 
 @router.post("/{case_id}/translate-fields")
 async def translate_fields_endpoint(
