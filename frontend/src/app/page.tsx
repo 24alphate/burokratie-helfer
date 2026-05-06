@@ -17,7 +17,7 @@ const LANGUAGES = [
 
 export default function LandingPage() {
   const router = useRouter();
-  const { setSessionToken, setCaseId, setLocale } = useCaseStore();
+  const { setSessionToken, setCaseId, setLocale, reset } = useCaseStore();
   const [selectedLocale, setSelectedLocale] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -27,6 +27,11 @@ export default function LandingPage() {
     setLoading(true);
     setError(null);
     try {
+      // Clear ALL stale state from previous sessions before creating a new one.
+      // Without this, old fields from a previous upload stay in localStorage and
+      // the questions page shows them for a completely different PDF.
+      reset();
+
       const session = await api.sessions.create(selectedLocale);
       setSessionToken(session.session_token);
       setLocale(selectedLocale);

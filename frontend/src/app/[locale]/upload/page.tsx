@@ -50,8 +50,8 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
     }
   }, [mounted]);
 
-  async function handleUploadComplete(uploadResult: UploadResponse) {
-    // uploadResult.fields is intentionally [] — the upload route returns no questions.
+  async function handleUploadComplete(_uploadResult: UploadResponse) {
+    // _uploadResult.fields is intentionally [] — the upload route returns no questions.
     // We must call extractPdfFields and AWAIT it before navigating.
     if (!sessionToken || !caseId) return;
 
@@ -78,7 +78,7 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
         return;
       }
 
-      setFields(showableFields);
+      setFields(showableFields, caseId);
       setReport(extracted.analysis_report ?? null);
       setStage("done");
 

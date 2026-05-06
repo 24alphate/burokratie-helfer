@@ -108,19 +108,25 @@ Rules:
 
 def static_fallback(fields: list[dict], user_language: str) -> dict[str, dict]:
     """
-    Instant question text from the static _Q lookup table.
-    Supports EN/DE/AR/TR natively; other languages fall back to English.
-    No network calls — always completes in < 1ms.
+    Fallback when Groq is unavailable. Uses the actual PDF label as the question text.
+
+    This guarantees grounding: the question text is always the real label from the
+    uploaded document, never an invented generic question from a lookup table.
+    The label may be in the document language (e.g. German), but it is always
+    traceable to a real field in the PDF.
     """
-    from app.services.dynamic_form_service import make_question_for_field
     result = {}
-    lang = user_language if user_language in ("en", "de", "ar", "tr") else "en"
     for f in fields:
-        q = make_question_for_field(f["field_name"])
+        # Use original_label (the real PDF text) as the question.
+        # This is always grounded — it came from the PDF itself.
+        # Fall back to field_name only if original_label is absent.
+        label = f.get("original_label") or f.get("field_name", "")
+        opts  = f.get("options", [])
         result[f["field_name"]] = {
-            "question": q["question_text"].get(lang, q["question_text"].get("en", f["field_name"])),
-            "explanation": q["explanation_text"].get(lang, ""),
-            "translated_options": {},
+            "question": label,
+            "explanation": "",
+            # Identity-map options: value shown as-is (PDF language) until Groq translates
+            "translated_options": {o: o for o in opts},
         }
     return result
 

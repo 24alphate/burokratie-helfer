@@ -32,7 +32,7 @@ const BLOCKED_BANNER: Record<string, (n: number) => string> = {
 export default function QuestionsPage({ params }: { params: { locale: string } }) {
   const { locale } = params;
   const router = useRouter();
-  const { sessionToken, caseId, fields, answeredKeys, addAnsweredKey } = useCaseStore();
+  const { sessionToken, caseId, fields, fieldsForCaseId, answeredKeys, addAnsweredKey } = useCaseStore();
   const [mounted, setMounted] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -45,10 +45,14 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
   }, [mounted, sessionToken, caseId, router]);
 
   useEffect(() => {
-    if (mounted && sessionToken && caseId && (fields ?? []).length === 0) {
+    if (!mounted || !sessionToken || !caseId) return;
+    // Hard ownership gate: if the stored fields belong to a different case (or no case),
+    // they are stale and must not be shown. Send the user back to upload.
+    const fieldsAreStale = fieldsForCaseId !== caseId;
+    if (fieldsAreStale || (fields ?? []).length === 0) {
       router.replace(`/${locale}/upload`);
     }
-  }, [mounted, sessionToken, caseId, fields, locale, router]);
+  }, [mounted, sessionToken, caseId, fieldsForCaseId, fields, locale, router]);
 
   // Derive question state — all fields already have show_question=true (filtered at upload)
   const safeFields      = fields ?? [];
