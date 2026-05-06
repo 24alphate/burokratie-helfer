@@ -54,3 +54,7 @@ class UploadResponse(BaseModel):
     document_language: str = "de"
     user_language: str = "en"
     analysis_report: Optional[AnalysisReport] = None
+    # Authoritative list of field_ids extracted directly from the PDF.
+    # This is the ground truth. Every key in `fields` must appear here.
+    # The frontend stores this separately and uses it as the hard grounding gate.
+    extracted_field_ids: list[str] = []

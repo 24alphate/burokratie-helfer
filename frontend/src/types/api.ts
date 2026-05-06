@@ -73,6 +73,9 @@ export interface UploadResponse {
   document_language: string;
   user_language: string;
   analysis_report?: AnalysisReport | null;
+  // Authoritative list of field_ids extracted directly from the PDF.
+  // Every key in `fields` must appear here. Used as the hard grounding gate.
+  extracted_field_ids: string[];
 }
 
 // Legacy: used by the ALG II fixed-template select inputs

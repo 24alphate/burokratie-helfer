@@ -67,6 +67,16 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
         return;
       }
 
+      // Authoritative field_id list from backend PDF extraction.
+      // This is the ground truth — every question must appear here.
+      const extractedFieldIds: string[] = extracted.extracted_field_ids ?? extracted.fields.map(f => f.key);
+
+      if (extractedFieldIds.length === 0) {
+        setError(t("no_fields", locale));
+        setStage("error");
+        return;
+      }
+
       // Only keep fields where show_question is not explicitly false
       const showableFields = extracted.fields.filter(
         (f) => f.show_question !== false
@@ -78,7 +88,9 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
         return;
       }
 
-      setFields(showableFields, caseId);
+      // Store fields, ownership caseId, documentId, AND the authoritative extractedFieldIds.
+      // The questions page uses extractedFieldIds as the hard grounding gate.
+      setFields(showableFields, caseId, extracted.document_id, extractedFieldIds);
       setReport(extracted.analysis_report ?? null);
       setStage("done");
 
@@ -87,6 +99,16 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
 
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Failed to analyse PDF.";
+
+      // HTTP 404 on extract-pdf-fields means the case/session no longer exists in DB.
+      // This happens after a Vercel cold start wipes the SQLite DB.
+      // The user must start a fresh session from the landing page.
+      if (msg.includes("404") || msg.toLowerCase().includes("not found")) {
+        setError("Session expired. Please go back to the start page and begin again.");
+        setStage("error");
+        return;
+      }
+
       // 422 = no extractable fields — not a crash, show friendly message
       if (msg.includes("422") || msg.toLowerCase().includes("no field")) {
         setError(t("no_fields", locale));

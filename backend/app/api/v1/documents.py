@@ -175,8 +175,6 @@ async def extract_pdf_fields(
 
     Returns HTTP 422 with a clear message when no fields can be extracted.
     """
-    log.info("extract-pdf-fields start case=%s lang=%s", case_id, user_language)
-
     case = db.query(Case).filter(Case.id == case_id, Case.user_id == user.id).first()
     if not case:
         raise HTTPException(status_code=404, detail="Case not found.")
@@ -198,11 +196,20 @@ async def extract_pdf_fields(
     if pdf_bytes[:4] != b"%PDF":
         raise HTTPException(status_code=400, detail="Uploaded file is not a PDF.")
 
+    log.info(
+        "extract-pdf-fields START case=%s doc=%s filename=%s lang=%s",
+        case_id, doc.id, doc.original_filename, user_language,
+    )
+
     # ── 1. Detect PDF type + extract deterministic field map ─────────────────
     extraction = extract_field_map(pdf_bytes)
+    extracted_ids = [e.field_id for e in extraction.fields]
+
     log.info(
-        "extract-pdf-fields type=%s pages=%d fields=%d case=%s",
-        extraction.pdf_type, extraction.total_pages, len(extraction.fields), case_id,
+        "extract-pdf-fields EXTRACTED case=%s doc=%s pdf_type=%s pages=%d field_count=%d "
+        "first_field_ids=%s",
+        case_id, doc.id, extraction.pdf_type, extraction.total_pages,
+        len(extraction.fields), extracted_ids[:10],
     )
 
     if not extraction.fields:
@@ -211,6 +218,8 @@ async def extract_pdf_fields(
             "flat":     "This PDF has no fillable fields and no recognisable field patterns.",
             "scanned":  "This PDF appears to be a scanned image — OCR is not yet supported.",
         }.get(extraction.pdf_type, "No fields could be extracted from this PDF.")
+        log.warning("extract-pdf-fields NO_FIELDS case=%s doc=%s pdf_type=%s",
+                    case_id, doc.id, extraction.pdf_type)
         raise HTTPException(status_code=422, detail=detail)
 
     # ── 2. Translate field labels + options via Groq ──────────────────────────
@@ -229,8 +238,8 @@ async def extract_pdf_fields(
     report = validate_no_hallucinations(extraction.fields, raw_translations)
     if not report.is_clean:
         log.warning(
-            "hallucination blocked case=%s invented=%s missing=%s",
-            case_id, report.invented, report.missing,
+            "extract-pdf-fields HALLUCINATION case=%s doc=%s invented=%s missing=%s",
+            case_id, doc.id, report.invented, report.missing,
         )
 
     # ── 4. Build field definitions with confidence gate ───────────────────────
@@ -245,7 +254,24 @@ async def extract_pdf_fields(
         document_language,
     )
 
-    # ── 5. Accuracy report ────────────────────────────────────────────────────
+    # ── 5. Hard backend assertion: every question must be in the extracted field map ──
+    extracted_ids_set = {e.field_id for e in extraction.fields}
+    for fd in field_defs:
+        if fd.key not in extracted_ids_set:
+            # This should be impossible — validate_no_hallucinations() guarantees it.
+            # If we reach here, there is a bug in the pipeline.
+            log.error(
+                "BUG extract-pdf-fields INVENTED_QUESTION case=%s doc=%s "
+                "question_key=%s not_in_extracted=%s",
+                case_id, doc.id, fd.key, extracted_ids_set,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=f"BUG: question '{fd.key}' not in extracted PDF field map. "
+                       "This question was not generated from the uploaded document.",
+            )
+
+    # ── 6. Accuracy report ────────────────────────────────────────────────────
     pipeline_report = build_analysis_report(extraction, field_defs, report)
     analysis = AnalysisReport(
         pdf_type=pipeline_report.pdf_type,
@@ -260,13 +286,19 @@ async def extract_pdf_fields(
         grounding_ok=pipeline_report.grounding_ok,
     )
 
+    shown_defs   = [d for d in field_defs if d.show_question]
+    blocked_defs = [d for d in field_defs if not d.show_question]
     log.info(
-        "extract-pdf-fields report case=%s shown=%d blocked=%d invented_removed=%d grounding=%s",
-        case_id, analysis.questions_shown, analysis.questions_blocked,
-        analysis.invented_questions_removed, analysis.grounding_rate,
+        "extract-pdf-fields RESULT case=%s doc=%s pdf_type=%s "
+        "field_count=%d question_count=%d blocked=%d invented_removed=%d "
+        "grounding_rate=%s first_question_ids=%s",
+        case_id, doc.id, extraction.pdf_type,
+        len(extraction.fields), len(shown_defs), len(blocked_defs),
+        len(report.invented), analysis.grounding_rate,
+        [d.key for d in shown_defs[:10]],
     )
 
-    # ── 6. Persist dynamic template + pre-filled answers ─────────────────────
+    # ── 7. Persist dynamic template + pre-filled answers ─────────────────────
     template_id, _ = create_dynamic_template(
         db=db, case_id=case_id,
         acroform_fields={e.field_id: e.current_value for e in extraction.fields},
@@ -293,6 +325,7 @@ async def extract_pdf_fields(
         document_language=document_language,
         user_language=user_language,
         analysis_report=analysis,
+        extracted_field_ids=extracted_ids,   # authoritative ground-truth list
     )
 
 
