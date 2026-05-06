@@ -35,7 +35,9 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
   useEffect(() => {
     if (!mounted) return;
     if (!sessionToken || !caseId) { router.replace("/"); return; }
-    api.questions.getAll(sessionToken, caseId).then(setAnswers).catch(console.error);
+    api.questions.getAll(sessionToken, caseId)
+      .then(setAnswers)
+      .catch(() => setError("Could not load answers — please try refreshing the page."));
   }, [mounted]);
 
   function handleEdit() {
