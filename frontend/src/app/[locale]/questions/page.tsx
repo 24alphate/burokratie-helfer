@@ -45,26 +45,28 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
   // Fields are stored in Zustand (localStorage) from the upload response.
   // This works across Vercel cold starts because localStorage persists.
 
-  const questionFields = fields.filter((f) => !f.is_prefilled);
-  const unanswered = questionFields.filter((f) => !answeredKeys.includes(f.key));
+  const safeFields = fields ?? [];
+  const safeAnsweredKeys = answeredKeys ?? [];
+  const questionFields = safeFields.filter((f) => !f.is_prefilled);
+  const unanswered = questionFields.filter((f) => !safeAnsweredKeys.includes(f.key));
   const nextField = unanswered[0] ?? null;
   const answeredCount = questionFields.length - unanswered.length;
   const totalCount = questionFields.length;
-  const prefillCount = fields.length - questionFields.length;
+  const prefillCount = safeFields.length - questionFields.length;
 
   // Redirect to upload if no fields stored (session without upload, or stale store)
   useEffect(() => {
-    if (mounted && sessionToken && caseId && fields.length === 0) {
+    if (mounted && sessionToken && caseId && safeFields.length === 0) {
       router.replace(`/${locale}/upload`);
     }
-  }, [mounted, sessionToken, caseId, fields.length, locale, router]);
+  }, [mounted, sessionToken, caseId, safeFields.length, locale, router]);
 
   // Navigate to review when all questions answered
   useEffect(() => {
-    if (mounted && fields.length > 0 && unanswered.length === 0) {
+    if (mounted && safeFields.length > 0 && unanswered.length === 0) {
       router.push(`/${locale}/review`);
     }
-  }, [mounted, fields.length, unanswered.length, locale, router]);
+  }, [mounted, safeFields.length, unanswered.length, locale, router]);
 
   async function handleAnswer(rawAnswer: string) {
     if (!nextField || !sessionToken || !caseId) return;
@@ -87,7 +89,7 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
     }
   }
 
-  if (!nextField && fields.length === 0) {
+  if (!nextField && safeFields.length === 0) {
     return (
       <>
         <Header />

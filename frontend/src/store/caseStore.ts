@@ -36,6 +36,15 @@ export const useCaseStore = create<CaseStore>()(
       addAnsweredKey: (key) => set((s) => ({ answeredKeys: [...s.answeredKeys, key] })),
       reset: () => set({ sessionToken: null, caseId: null, pdfId: null, fields: [], answeredKeys: [] }),
     }),
-    { name: "bh-store" }
+    {
+      name: "bh-store",
+      // Safely merge old persisted state that may lack fields/answeredKeys
+      merge: (persisted: unknown, current) => ({
+        ...current,
+        ...(persisted as object),
+        fields: (persisted as any)?.fields ?? [],
+        answeredKeys: (persisted as any)?.answeredKeys ?? [],
+      }),
+    }
   )
 );
