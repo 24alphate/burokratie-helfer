@@ -1,13 +1,17 @@
 """
-Upload route — always returns in < 2s on Vercel, zero LLM calls, zero pypdf on upload.
+Upload + PDF extraction routes.
 
 Flow:
-  1. Upload → saves file, returns Path B (fixed template) immediately
-  2. Frontend fires POST /cases/{id}/extract-pdf-fields (fire-and-forget, no timeout pressure)
-  3. extract-pdf-fields reads AcroForm, creates dynamic template, returns FieldDefinitions
-  4. Frontend merges returned fields into Zustand, replacing the generic ones
+  1. POST /cases/{id}/upload  → saves file, returns fixed-template fields instantly (< 2s)
+  2. POST /cases/{id}/extract-pdf-fields  → background call; reads AcroForm field tree,
+     creates dynamic template, returns real FieldDefinitions with options
+  3. POST /cases/{id}/translate-fields   → background call; Groq translation of questions
 
-Groq / LLM calls happen ONLY in the /translate-fields endpoint.
+Language rule:
+  FieldOption.value  = PDF-native value (written to the PDF, e.g. "verheiratet")
+  FieldOption.label  = user-facing text   (shown in UI,      e.g. "Marié(e)")
+  raw_answer         = option.value  for choice fields  (already in PDF language)
+  translated_answer  = Groq output   for text fields    (user lang → PDF lang)
 """
 from __future__ import annotations
 
@@ -34,21 +38,24 @@ from app.models.question import Question
 from app.models.user import User
 from app.schemas.document import FieldDefinition, FieldOption, UploadResponse
 from app.services.audit_service import audit_service
-from app.services.dynamic_form_service import create_dynamic_template, make_question_for_field
+from app.services.dynamic_form_service import create_dynamic_template
 from app.services.question_translator import static_fallback, translate_fields
 from app.services.validation_service import validation_service
 
 router = APIRouter(prefix="/cases", tags=["documents"])
 
 MAX_SIZE_BYTES = settings.max_upload_size_mb * 1024 * 1024
-MAX_ACROFORM_FIELDS = 120   # safety cap — very large forms can cause OOM
+MAX_ACROFORM_FIELDS = 150   # safety cap to bound memory / time
 
 _FF_RADIO       = 1 << 15
 _FF_PUSHBUTTON  = 1 << 16
 _FF_MULTISELECT = 1 << 21
 
+# Choice field types — raw_answer for these is already the PDF-native value
+CHOICE_TYPES = {"radio", "checkbox", "select", "multiselect", "yes_no"}
 
-# ── AcroForm extraction (called ONLY from background endpoint, not from upload) ──
+
+# ── AcroForm field-type classifier ────────────────────────────────────────────
 
 def _acroform_field_type(ft: str, flags: int) -> Optional[str]:
     if ft == "/Tx":   return "text"
@@ -60,84 +67,142 @@ def _acroform_field_type(ft: str, flags: int) -> Optional[str]:
     return "text"
 
 
-def _extract_acroform_shallow(pdf_bytes: bytes) -> list[dict]:
+# ── Radio-option extraction from /Kids (field-tree only, no page walk) ────────
+
+def _radio_options_from_kids(field_obj) -> list[str]:
     """
-    Lightweight AcroForm extraction — reads only the top-level /Fields array,
-    no recursive descent into child widgets, no annotation walk.
-    Called from the background /extract-pdf-fields endpoint only.
+    Extract radio button export values from a /Btn group's /Kids widgets.
+
+    Path: field → /Kids[] → each widget → /AP/N → key names (= export values).
+    This is purely within the AcroForm field tree — never touches page objects,
+    so it cannot cause OOM on large multi-page forms.
+    """
+    options: list[str] = []
+    kids = field_obj.get("/Kids", [])
+    if hasattr(kids, "get_object"):
+        kids = kids.get_object()
+    for kid_ref in list(kids)[:50]:
+        try:
+            kid = kid_ref.get_object() if hasattr(kid_ref, "get_object") else kid_ref
+            ap = kid.get("/AP")
+            if ap is None:
+                continue
+            if hasattr(ap, "get_object"):
+                ap = ap.get_object()
+            normal = ap.get("/N")
+            if normal is None:
+                continue
+            if hasattr(normal, "get_object"):
+                normal = normal.get_object()
+            for key in (normal.keys() if hasattr(normal, "keys") else []):
+                val = str(key).lstrip("/")
+                if val and val.lower() not in ("off", ""):
+                    if val not in options:
+                        options.append(val)
+        except Exception:
+            continue
+    return options
+
+
+# ── Recursive AcroForm field-tree walker ──────────────────────────────────────
+
+def _walk_acroform_fields(fields_array, seen: set[str], depth: int = 0) -> list[dict]:
+    """
+    Walk the AcroForm /Fields tree recursively.
+
+    Handles intermediate group nodes (fields with /Kids but no /FT) — common in
+    complex German government forms where fields are nested inside named groups.
+    Radio options are collected from /Kids → /AP/N (field tree, not page tree).
+    """
+    results: list[dict] = []
+    for field_ref in list(fields_array):
+        if len(seen) >= MAX_ACROFORM_FIELDS:
+            break
+        try:
+            field = field_ref.get_object() if hasattr(field_ref, "get_object") else field_ref
+            ft_raw = field.get("/FT")
+            has_kids = "/Kids" in field
+
+            # Intermediate group node — no /FT, has /Kids → recurse
+            if ft_raw is None and has_kids and depth < 5:
+                kids = field.get("/Kids", [])
+                if hasattr(kids, "get_object"):
+                    kids = kids.get_object()
+                results.extend(_walk_acroform_fields(kids, seen, depth + 1))
+                continue
+
+            # Leaf widget — extract name
+            name = field.get("/T", "")
+            if hasattr(name, "get_object"):
+                name = name.get_object()
+            clean = str(name).lstrip("/").strip()
+            if not clean or clean in seen:
+                continue
+            seen.add(clean)
+
+            # Field type
+            ft_str = str(ft_raw) if ft_raw else "/Tx"
+            try:
+                flags = int(str(field.get("/Ff", "0")).split(".")[0] or "0")
+            except (ValueError, TypeError):
+                flags = 0
+            ftype = _acroform_field_type(ft_str, flags) or "text"
+
+            # Current / default value
+            val = field.get("/V") or field.get("/DV") or ""
+            if hasattr(val, "raw_value"):
+                val = val.raw_value
+            val = str(val).strip()
+            if val in ("/Off", "Off", "None", "none"):
+                val = ""
+            elif val.startswith("/"):
+                val = val[1:]
+
+            # Options (for choice fields)
+            options: list[str] = []
+            if ftype in ("select", "multiselect"):
+                try:
+                    raw_opts = field.get("/Opt", [])
+                    for o in (raw_opts if isinstance(raw_opts, list) else []):
+                        options.append(str(o[0]) if isinstance(o, (list, tuple)) else str(o))
+                except Exception:
+                    options = []
+            elif ftype == "radio" and has_kids:
+                options = _radio_options_from_kids(field)
+
+            results.append({
+                "field_name":    clean,
+                "field_type":    ftype,
+                "current_value": val,
+                "options":       options,
+                "original_label": clean,
+            })
+        except Exception:
+            continue
+    return results
+
+
+def _extract_acroform_fields(pdf_bytes: bytes) -> list[dict]:
+    """
+    Public entry point for AcroForm extraction.
+    Uses field-tree traversal — safe on any size PDF.
     """
     try:
         reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
-
-        # Navigate to AcroForm without calling the expensive get_fields()
         root = reader.trailer.get("/Root")
         if root is None:
             return []
         if hasattr(root, "get_object"):
             root = root.get_object()
-
         acroform_ref = root.get("/AcroForm")
         if acroform_ref is None:
             return []
         if hasattr(acroform_ref, "get_object"):
             acroform_ref = acroform_ref.get_object()
-
         fields_array = acroform_ref.get("/Fields", [])
         if hasattr(fields_array, "get_object"):
             fields_array = fields_array.get_object()
-
-        results: list[dict] = []
-        seen_names: set[str] = set()
-
-        for field_ref in list(fields_array)[:MAX_ACROFORM_FIELDS]:
-            try:
-                field = field_ref.get_object() if hasattr(field_ref, "get_object") else field_ref
-
-                name = field.get("/T", "")
-                if hasattr(name, "get_object"):
-                    name = name.get_object()
-                clean = str(name).lstrip("/").strip()
-                if not clean or clean in seen_names:
-                    continue
-                seen_names.add(clean)
-
-                ft = str(field.get("/FT", "/Tx"))
-                try:
-                    flags = int(str(field.get("/Ff", "0")).split(".")[0] or "0")
-                except (ValueError, TypeError):
-                    flags = 0
-
-                ftype = _acroform_field_type(ft, flags) or "text"
-
-                val = field.get("/V") or field.get("/DV") or ""
-                if hasattr(val, "raw_value"):
-                    val = val.raw_value
-                val = str(val).strip()
-                if val in ("/Off", "Off", "None", "none"):
-                    val = ""
-                elif val.startswith("/"):
-                    val = val[1:]
-
-                options: list[str] = []
-                if ftype in ("select", "multiselect"):
-                    try:
-                        raw_opts = field.get("/Opt", [])
-                        for o in (raw_opts if isinstance(raw_opts, list) else []):
-                            options.append(str(o[0]) if isinstance(o, (list, tuple)) else str(o))
-                    except Exception:
-                        options = []
-
-                results.append({
-                    "field_name": clean,
-                    "field_type": ftype,
-                    "current_value": val,
-                    "options": options,
-                    "original_label": clean,
-                })
-            except Exception:
-                continue
-
-        return results
+        return _walk_acroform_fields(fields_array, seen=set())
     except Exception:
         return []
 
@@ -157,7 +222,11 @@ def _build_field_defs(
         fname  = f["field_name"]
         tr     = translations.get(fname, {})
         tr_opts = tr.get("translated_options", {})
-        options = [FieldOption(value=v, label=tr_opts.get(v, v)) for v in f.get("options", [])]
+        # Options: value = PDF-native export value, label = translated user text
+        options = [
+            FieldOption(value=v, label=tr_opts.get(v, v))
+            for v in f.get("options", [])
+        ]
         defs.append(FieldDefinition(
             key=fname,
             question={user_language: tr.get("question") or fname},
@@ -175,7 +244,7 @@ def _build_field_defs(
     return defs
 
 
-# ── Upload route — always returns < 2s, zero PDF parsing ─────────────────────
+# ── Upload route — always returns < 2s, no pypdf ──────────────────────────────
 
 @router.post("/{case_id}/upload", response_model=UploadResponse)
 async def upload_document(
@@ -203,7 +272,7 @@ async def upload_document(
     dest    = upload_dir / f"{file_id}{suffix}"
     dest.write_bytes(content)
 
-    # ── Use fixed template immediately (no PDF parsing on upload path) ────────
+    # Auto-select the fixed template when there is exactly one (no OCR needed)
     detected_type: Optional[str] = None
     all_fixed = db.query(FormTemplate).filter(
         ~FormTemplate.id.startswith("dyn_")
@@ -227,6 +296,7 @@ async def upload_document(
     db.add(doc)
     db.flush()
 
+    # Return generic fixed-template questions immediately
     field_defs: list[FieldDefinition] = []
     if detected_type:
         questions = db.query(Question).filter(
@@ -270,7 +340,7 @@ async def upload_document(
     )
 
 
-# ── PDF field extraction — called fire-and-forget AFTER upload returns ────────
+# ── PDF field extraction — fire-and-forget after upload ───────────────────────
 
 @router.post("/{case_id}/extract-pdf-fields", response_model=UploadResponse)
 async def extract_pdf_fields(
@@ -282,10 +352,17 @@ async def extract_pdf_fields(
     user: User = Depends(get_current_user),
 ):
     """
-    Reads AcroForm fields from the most-recently uploaded PDF for this case.
-    Called fire-and-forget by the frontend immediately after upload completes.
-    Has no Vercel timeout pressure because the upload response was already sent.
-    Returns a full UploadResponse so the frontend can replace its field list.
+    Reads the uploaded PDF's AcroForm field tree and returns precise field
+    definitions grounded in the actual document.
+
+    Called fire-and-forget by the frontend after upload completes.
+    No Vercel timeout pressure: the upload response was already sent.
+
+    Guarantees:
+    - Every returned question has a source field_name matching an AcroForm widget.
+    - Radio/checkbox fields include their export values as options[].value.
+    - Choice field options have translated labels via Groq (when available).
+    - confidence=1.0 for AcroForm widgets (ground truth).
     """
     case = db.query(Case).filter(Case.id == case_id, Case.user_id == user.id).first()
     if not case:
@@ -308,17 +385,17 @@ async def extract_pdf_fields(
     if pdf_bytes[:4] != b"%PDF":
         raise HTTPException(status_code=400, detail="Uploaded file is not a PDF.")
 
-    extracted_fields = _extract_acroform_shallow(pdf_bytes)
+    extracted_fields = _extract_acroform_fields(pdf_bytes)
     if not extracted_fields:
         raise HTTPException(status_code=422, detail="No AcroForm fields found in PDF.")
 
-    trans_svc = None  # not needed here — we use static_fallback
-    translations   = static_fallback(extracted_fields, user_language)
-    prefilled_raw  = {f["field_name"]: f["current_value"]
-                      for f in extracted_fields if f["current_value"]}
+    # Translate questions + option labels via Groq (this endpoint has no time pressure)
+    translations = translate_fields(extracted_fields, user_language, document_language)
+
+    prefilled_raw = {f["field_name"]: f["current_value"]
+                     for f in extracted_fields if f["current_value"]}
     form_name = storage_path.stem.replace("_", " ").title()
 
-    # Delete any previous dynamic template for this case, create a fresh one
     template_id, _ = create_dynamic_template(
         db=db, case_id=case_id,
         acroform_fields={f["field_name"]: f["current_value"] for f in extracted_fields},
@@ -332,8 +409,7 @@ async def extract_pdf_fields(
 
     db.flush()
 
-    # Save pre-filled answers if any
-    count = await _save_answers(db, case_id, template_id, prefilled_raw)
+    count = _save_prefilled_answers(db, case_id, template_id, prefilled_raw)
 
     field_defs = _build_field_defs(
         extracted_fields, translations,
@@ -361,8 +437,8 @@ async def translate_fields_endpoint(
     user: User = Depends(get_current_user),
 ):
     """
-    Runs Groq translation for all fields in user's language.
-    Safe to call async — runs in its own request, not on the critical upload path.
+    Runs Groq translation for all fields.
+    Called fire-and-forget — not on the critical upload path.
     """
     case = db.query(Case).filter(Case.id == case_id, Case.user_id == user.id).first()
     if not case:
@@ -373,7 +449,13 @@ async def translate_fields_endpoint(
     return translate_fields(fields_input, user_language, document_language)
 
 
-async def _save_answers(db, case_id, template_id, extracted) -> int:
+# ── Pre-fill answers from PDF (no translation — values already in PDF lang) ───
+
+def _save_prefilled_answers(db, case_id: str, template_id: str, extracted: dict[str, str]) -> int:
+    """
+    Store pre-filled values from the uploaded PDF as Answer rows.
+    raw_answer = translated_answer = the PDF-native value (no LLM needed).
+    """
     if not extracted:
         return 0
     fields     = db.query(FormField).filter(FormField.template_id == template_id).all()
@@ -385,11 +467,14 @@ async def _save_answers(db, case_id, template_id, extracted) -> int:
         field   = valid_keys[field_key]
         vresult = validation_service.validate_answer(raw_value, field.validation_rules, language="de")
         db.query(Answer).filter(
-            Answer.case_id == case_id, Answer.field_key == field_key, Answer.is_active == True,
+            Answer.case_id == case_id,
+            Answer.field_key == field_key,
+            Answer.is_active == True,
         ).update({"is_active": False})
         db.add(Answer(
-            case_id=case_id, field_key=field_key, raw_answer=raw_value,
-            translated_answer=raw_value,
+            case_id=case_id, field_key=field_key,
+            raw_answer=raw_value,
+            translated_answer=raw_value,  # pre-fills are already in PDF language
             is_validated=vresult.is_valid,
             validation_errors=json.dumps(vresult.errors),
             is_active=True, answered_at=datetime.now(timezone.utc),

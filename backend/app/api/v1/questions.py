@@ -109,14 +109,23 @@ async def submit_answer(
             language=user.preferred_language,
         )
 
-    # Translate answer to German (via service layer — never raw AI output to PDF)
-    translation_service = request.app.state.translation_service
-    translation = await translation_service.translate(
-        payload.raw_answer,
-        source_language=user.preferred_language,
-        target_language="de",
-        field_context=payload.field_key,
-    )
+    # For choice fields (radio/checkbox/select) the frontend submits option.value
+    # which is already the PDF-native export value — no translation needed.
+    # For text fields, translate from user's language to the PDF's language (German).
+    _CHOICE_DATA_TYPES = {"radio", "checkbox", "select", "multiselect", "boolean", "yes_no"}
+    is_choice_field = field and field.data_type in _CHOICE_DATA_TYPES
+
+    if is_choice_field:
+        translated_text = payload.raw_answer  # already in PDF language
+    else:
+        translation_service = request.app.state.translation_service
+        translation = await translation_service.translate(
+            payload.raw_answer,
+            source_language=user.preferred_language,
+            target_language="de",
+            field_context=payload.field_key,
+        )
+        translated_text = translation.translated_text
 
     # Soft-delete any existing active answer for this field (user is re-answering)
     existing = db.query(Answer).filter(
@@ -148,7 +157,7 @@ async def submit_answer(
         case_id=case_id,
         field_key=payload.field_key,
         raw_answer=payload.raw_answer,
-        translated_answer=translation.translated_text,
+        translated_answer=translated_text,
         is_validated=vresult.is_valid,
         validation_errors=json.dumps(vresult.errors),
         is_active=True,

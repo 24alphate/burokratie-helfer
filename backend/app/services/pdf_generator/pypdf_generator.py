@@ -32,14 +32,61 @@ class PyPDFGenerator(PDFGeneratorService):
         writer = PdfWriter()
         writer.append(reader)
 
+        # Classify each field so we can format values correctly
+        radio_fields:    set[str] = set()  # radio group → value = export name (e.g. "verheiratet")
+        checkbox_fields: set[str] = set()  # single checkbox → value = "Yes" / "Off"
+        _FF_RADIO    = 1 << 15
+        _FF_PUSHBTN  = 1 << 16
+        try:
+            raw_fields = reader.get_fields() or {}
+            for fname, fobj in raw_fields.items():
+                ft = str(fobj.get("/FT", "/Tx"))
+                ff = int(str(fobj.get("/Ff", "0")).split(".")[0] or "0")
+                if ft == "/Btn" and not (ff & _FF_PUSHBTN):
+                    clean = fname.lstrip("/").strip()
+                    if ff & _FF_RADIO:
+                        radio_fields.add(clean)
+                    else:
+                        checkbox_fields.add(clean)
+        except Exception as e:
+            warnings.append(f"Field-type detection warning: {e}")
+
         filled = 0
         for page in writer.pages:
             try:
-                writer.update_page_form_field_values(
-                    page,
-                    request.field_values,
-                    auto_regenerate=False,
-                )
+                # 1. Text / date / number / signature fields
+                text_values = {
+                    k: v for k, v in request.field_values.items()
+                    if k not in radio_fields and k not in checkbox_fields
+                }
+                if text_values:
+                    writer.update_page_form_field_values(
+                        page, text_values, auto_regenerate=False,
+                    )
+
+                # 2. Radio / select fields — value is the PDF export value (e.g. "verheiratet")
+                radio_values = {
+                    k: v for k, v in request.field_values.items()
+                    if k in radio_fields and v
+                }
+                if radio_values:
+                    writer.update_page_form_field_values(
+                        page, radio_values, auto_regenerate=False,
+                    )
+
+                # 3. Checkbox fields — normalise to "Yes" / "Off"
+                for k, v in request.field_values.items():
+                    if k in checkbox_fields:
+                        normalised = "Yes" if str(v).lower() in (
+                            "yes", "ja", "true", "1", "x", "on"
+                        ) else "Off"
+                        try:
+                            writer.update_page_form_field_values(
+                                page, {k: normalised}, auto_regenerate=False,
+                            )
+                        except Exception as e:
+                            warnings.append(f"Checkbox '{k}': {e}")
+
                 filled = len(request.field_values)
             except Exception as e:
                 warnings.append(f"Page field update warning: {e}")
