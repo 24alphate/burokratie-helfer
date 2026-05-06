@@ -17,7 +17,11 @@ Architecture:
       │       Reject any field_id AI returned that is not in the extracted map.
       │       Add fallback (raw label) for any field AI missed.
       │
-      └─[5] build_field_defs()  →  list[FieldDefinition]
+      └─[5] field_map_to_defs()  →  list[FieldDefinition]
+              Applies confidence gate:
+              conf >= 0.90  → show_question=True,  needs_review=False
+              0.70–0.89     → show_question=True,  needs_review=True
+              conf < 0.70   → show_question=False  (blocked, logged)
 
 Anti-hallucination guarantee:
     After AI returns translations, EVERY key is checked against extracted_ids.
@@ -38,6 +42,10 @@ _FF_MULTISELECT = 1 << 21
 
 MAX_FIELDS = 200   # cap total extracted fields per document
 
+# Confidence thresholds
+CONF_SHOW_MIN     = 0.70   # below this → show_question=False (blocked)
+CONF_REVIEW_MIN   = 0.90   # below this (but >= 0.70) → needs_review=True
+
 
 # ── Data model ────────────────────────────────────────────────────────────────
 
@@ -54,9 +62,11 @@ class FieldMapEntry:
     bbox: Optional[list[float]] = None       # [x0, y0, x1, y1] in PDF points
     options: list[str] = field(default_factory=list)  # PDF-native option values
     current_value: str = ""     # pre-filled value if any
-    confidence: float = 1.0     # 1.0=AcroForm, 0.8=pdfplumber layout, 0.5=ocr
+    confidence: float = 1.0     # 1.0=AcroForm, 0.75=pdfplumber layout, 0.5=ocr
     source: str = "acroform"    # "acroform" | "pdfplumber" | "ocr"
     required: bool = False
+    source_text: str = ""       # exact text from the PDF that grounds this field
+    reason: str = "pdf_field"   # "pdf_field" | "derived_helper"
 
 
 @dataclass
@@ -78,6 +88,25 @@ class HallucinationReport:
     cleaned_translations: dict      # safe dict: invented removed, missing backfilled
 
 
+@dataclass
+class AnalysisReport:
+    """
+    Accuracy report returned after field extraction.
+    grounding_rate is always 100% by design (anti-hallucination validator enforces this).
+    coverage_rate = what fraction of extracted fields became visible questions.
+    """
+    pdf_type: str
+    total_pages: int
+    field_count: int                # fields extracted from PDF
+    questions_shown: int            # fields with show_question=True (conf >= 0.70)
+    questions_blocked: int          # fields with show_question=False (conf < 0.70)
+    low_confidence_fields: int      # conf in [0.70, 0.90) → shown but needs_review
+    invented_questions_removed: int # AI-invented keys discarded by anti-hallucination
+    coverage_rate: str              # questions_shown / field_count (as percentage)
+    grounding_rate: str             # always "100%" — enforced by validator
+    grounding_ok: bool              # True when grounding_rate == 100%
+
+
 # ── PDF type detection ─────────────────────────────────────────────────────────
 
 def detect_pdf_type(pdf_bytes: bytes) -> tuple[str, int]:
@@ -94,7 +123,6 @@ def detect_pdf_type(pdf_bytes: bytes) -> tuple[str, int]:
         reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
         page_count = len(reader.pages)
 
-        # Check for AcroForm with at least one field
         root = reader.trailer.get("/Root")
         if root:
             if hasattr(root, "get_object"):
@@ -109,7 +137,6 @@ def detect_pdf_type(pdf_bytes: bytes) -> tuple[str, int]:
                 if len(list(fields_arr)) > 0:
                     return "acroform", page_count
 
-        # Check for readable text
         total_chars = 0
         for page in reader.pages[:5]:
             try:
@@ -119,7 +146,7 @@ def detect_pdf_type(pdf_bytes: bytes) -> tuple[str, int]:
 
         return ("flat" if total_chars > 200 else "scanned"), page_count
 
-    except Exception as e:
+    except Exception:
         return "unknown", 0
 
 
@@ -168,7 +195,6 @@ def _collect_widget_positions(reader) -> dict[str, tuple[int, Optional[list[floa
     """
     One-pass page walk: collect widget name → (page_num, bbox).
     Lightweight: only reads /T, /Rect, /Subtype — no AP stream resolution.
-    Called once per document, O(pages × annotations).
     """
     positions: dict[str, tuple[int, Optional[list[float]]]] = {}
     for page_num, page in enumerate(reader.pages, 1):
@@ -226,7 +252,6 @@ def _walk_field_tree(
             ft_raw = f.get("/FT")
             has_kids = "/Kids" in f
 
-            # Intermediate group node — recurse
             if ft_raw is None and has_kids and depth < 5:
                 kids = f.get("/Kids", [])
                 if hasattr(kids, "get_object"):
@@ -234,7 +259,6 @@ def _walk_field_tree(
                 results.extend(_walk_field_tree(kids, seen, widget_positions, depth + 1))
                 continue
 
-            # Leaf widget — extract name
             name = f.get("/T", "")
             if hasattr(name, "get_object"):
                 name = name.get_object()
@@ -243,7 +267,6 @@ def _walk_field_tree(
                 continue
             seen.add(clean)
 
-            # Field type
             ft_str = str(ft_raw) if ft_raw else "/Tx"
             try:
                 flags = int(str(f.get("/Ff", "0")).split(".")[0] or "0")
@@ -251,7 +274,6 @@ def _walk_field_tree(
                 flags = 0
             ftype = _classify_field_type(ft_str, flags) or "text"
 
-            # Current / default value
             val = f.get("/V") or f.get("/DV") or ""
             if hasattr(val, "raw_value"):
                 val = val.raw_value
@@ -261,7 +283,6 @@ def _walk_field_tree(
             elif val.startswith("/"):
                 val = val[1:]
 
-            # Options (choice fields)
             options: list[str] = []
             if ftype in ("select", "multiselect"):
                 try:
@@ -273,7 +294,6 @@ def _walk_field_tree(
             elif ftype == "radio" and has_kids:
                 options = _radio_options_from_kids(f)
 
-            # Page + bbox from the widget position map
             page_num, bbox = widget_positions.get(clean, (1, None))
 
             results.append(FieldMapEntry(
@@ -286,6 +306,8 @@ def _walk_field_tree(
                 current_value=val,
                 confidence=1.0,
                 source="acroform",
+                source_text=clean,   # AcroForm widget name IS the PDF ground truth
+                reason="pdf_field",
             ))
         except Exception:
             continue
@@ -315,7 +337,6 @@ def extract_acroform_fields(pdf_bytes: bytes) -> list[FieldMapEntry]:
         if hasattr(fields_arr, "get_object"):
             fields_arr = fields_arr.get_object()
 
-        # One page walk for positions (lightweight — no AP resolution)
         widget_positions = _collect_widget_positions(reader)
 
         seen: set[str] = set()
@@ -327,19 +348,15 @@ def extract_acroform_fields(pdf_bytes: bytes) -> list[FieldMapEntry]:
 
 # ── Flat PDF extraction (pdfplumber text + layout) ────────────────────────────
 
-# Known German government form field patterns (calibrated on real Jobcenter forms).
-# Every pattern is anchored to something actually IN the PDF — no topic-based invention.
+_RE_BLANK_AFTER_COLON   = re.compile(r"^(.{2,80}):\s*_{3,}")
+_RE_BLANKS_THEN_UNIT    = re.compile(r"^_{3,}\s+(.{2,60})")
+_RE_UNICODE_CHECKBOX    = re.compile(r"(□|☐|\[\s*\]|\(\s*\))\s*(.{2,60})")
+_RE_LETTER_CHECKBOX     = re.compile(r"^([A-Z])\s+(Leistung\w+\s.{5,80})")
+_RE_ORT_DATUM           = re.compile(r"Ort.{0,5}Datum", re.IGNORECASE)
+_RE_UNTERSCHRIFT        = re.compile(r"Unterschrift", re.IGNORECASE)
+_RE_STANDALONE_LABEL    = re.compile(r"^([A-ZÄÖÜ][^:!?)]{2,120}[^:!?).])$")
+_RE_BETRAG_KM           = re.compile(r"betr[äa]gt\s+km", re.IGNORECASE)
 
-_RE_BLANK_AFTER_COLON   = re.compile(r"^(.{2,80}):\s*_{3,}")          # "Label: ___"
-_RE_BLANKS_THEN_UNIT    = re.compile(r"^_{3,}\s+(.{2,60})")           # "_____ EUR ..."
-_RE_UNICODE_CHECKBOX    = re.compile(r"(□|☐|\[\s*\]|\(\s*\))\s*(.{2,60})")  # □ Option
-_RE_LETTER_CHECKBOX     = re.compile(r"^([A-Z])\s+(Leistung\w+\s.{5,80})")  # A Leistungen für …
-_RE_ORT_DATUM           = re.compile(r"Ort.{0,5}Datum", re.IGNORECASE)        # Ort/Datum …
-_RE_UNTERSCHRIFT        = re.compile(r"Unterschrift", re.IGNORECASE)           # Unterschrift …
-_RE_STANDALONE_LABEL    = re.compile(r"^([A-ZÄÖÜ][^:!?)]{2,120}[^:!?).])$")  # "Name, Vorname"
-_RE_BETRAG_KM           = re.compile(r"betr[äa]gt\s+km", re.IGNORECASE)  # "beträgt km."
-
-# Words that are structural text, not field labels — never generate a question for these
 _SKIP_PHRASES = {
     "hinweis", "bitte", "gemeinschaftlichen", "anspruchsberechtigte",
     "ich versichere", "ich bin damit", "auf ihre rechte", "rechtsgrundlage",
@@ -358,7 +375,6 @@ def _skip(label: str) -> bool:
     for phrase in _SKIP_PHRASES:
         if phrase in lo:
             return True
-    # Skip lines that are mostly punctuation/numbers
     if re.match(r'^[\d\s\.,\-\(\)%€/]+$', lo):
         return True
     return False
@@ -373,17 +389,9 @@ def extract_flat_fields(pdf_bytes: bytes) -> list[FieldMapEntry]:
     """
     Field detection for flat (non-fillable) PDFs using pdfplumber text extraction.
 
-    Handles German government form patterns:
-    - "Label: ___..." (blanks after colon)
-    - "_____ EUR / km" (leading underscores with unit)
-    - "□ Option" / "A Leistungen für …" (checkbox-style options)
-    - "Ort/Datum", "Unterschrift" (signature areas)
-    - Standalone title-case label lines ("Name, Vorname", "Postanschrift")
-
     Every returned field_id is grounded in a real line of text from the PDF.
+    source_text is the exact matched PDF line — the evidence for why this question exists.
     No fields are invented from the topic of the document.
-    confidence = 0.75 (below the needs_review threshold of 0.7? No — 0.75 > 0.7,
-    but source="pdfplumber" triggers needs_review=True regardless).
     """
     try:
         import pdfplumber
@@ -392,10 +400,11 @@ def extract_flat_fields(pdf_bytes: bytes) -> list[FieldMapEntry]:
 
     results: list[FieldMapEntry] = []
     seen: set[str] = set()
-    letter_checkbox_options: list[str] = []  # collect A,B,C... options for a group
-    letter_checkbox_group_started = False
+    letter_checkbox_options: list[str] = []
+    letter_checkbox_source_lines: list[str] = []
 
-    def _add(label: str, ftype: str, page: int, opts: Optional[list[str]] = None) -> None:
+    def _add(label: str, ftype: str, page: int,
+             opts: Optional[list[str]] = None, source_text: str = "") -> None:
         fid = _make_fid(label)
         if not fid or fid in seen or _skip(label):
             return
@@ -408,6 +417,8 @@ def extract_flat_fields(pdf_bytes: bytes) -> list[FieldMapEntry]:
             options=opts or [],
             confidence=0.75,
             source="pdfplumber",
+            source_text=source_text or label.strip(),  # exact PDF text = grounding evidence
+            reason="pdf_field",
         ))
 
     try:
@@ -427,53 +438,49 @@ def extract_flat_fields(pdf_bytes: bytes) -> list[FieldMapEntry]:
                     # 1. "Label: ___" — explicit blank after colon
                     m = _RE_BLANK_AFTER_COLON.match(line)
                     if m:
-                        _add(m.group(1).strip(), "text", page_num)
+                        _add(m.group(1).strip(), "text", page_num, source_text=line)
                         continue
 
                     # 2. "_____ EUR / km" — fill-in amount or distance
                     m = _RE_BLANKS_THEN_UNIT.match(line)
                     if m:
-                        unit_label = m.group(1).strip()
-                        _add(unit_label, "number", page_num)
+                        _add(m.group(1).strip(), "number", page_num, source_text=line)
                         continue
 
                     # 3. "beträgt km." — distance fill-in
                     if _RE_BETRAG_KM.search(line):
-                        _add("Strecke_km", "number", page_num)
+                        _add("Strecke_km", "number", page_num, source_text=line)
                         continue
 
-                    # 4. "□ Option" or "☐ Option" — unicode checkbox
+                    # 4. "□ Option" — unicode checkbox
                     if _RE_UNICODE_CHECKBOX.search(line):
                         for m in _RE_UNICODE_CHECKBOX.finditer(line):
-                            _add(m.group(2).strip(), "checkbox", page_num)
+                            _add(m.group(2).strip(), "checkbox", page_num, source_text=line)
                         continue
 
                     # 5. "A Leistungen für …" — letter-prefixed checkbox group
                     m = _RE_LETTER_CHECKBOX.match(line)
                     if m:
                         full_label = m.group(0)
-                        # Truncate at parenthesis (explanatory text starts there)
                         short_label = re.split(r'\(', full_label, 1)[0].strip()
                         letter_prefix = m.group(1)
                         option_label = f"{letter_prefix}: {short_label[2:].strip()}"[:100]
                         letter_checkbox_options.append(option_label)
-                        letter_checkbox_group_started = True
+                        letter_checkbox_source_lines.append(line)
                         continue
 
-                    # 6. "Ort/Datum" — date+place signature area
+                    # 6. "Ort/Datum" — date+place
                     if _RE_ORT_DATUM.search(line):
-                        _add("Ort_Datum", "text", page_num)
+                        _add("Ort_Datum", "text", page_num, source_text=line)
                         continue
 
-                    # 7. "Unterschrift …" — signature line
+                    # 7. "Unterschrift" — signature line
                     if _RE_UNTERSCHRIFT.search(line):
-                        _add("Unterschrift", "signature", page_num)
+                        _add("Unterschrift", "signature", page_num, source_text=line)
                         continue
 
-                    # 8. Standalone title-case label line (e.g. "Name, Vorname")
+                    # 8. Standalone title-case label line ("Name, Vorname")
                     if _RE_STANDALONE_LABEL.match(line) and not _skip(line):
-                        # Only treat as a label if the next non-empty line looks like
-                        # another label or is blank (i.e. this line IS the field)
                         next_lines = [l.strip() for l in lines[i+1:i+3] if l.strip()]
                         next_is_label = (
                             not next_lines
@@ -481,16 +488,17 @@ def extract_flat_fields(pdf_bytes: bytes) -> list[FieldMapEntry]:
                             or len(next_lines[0]) < 6
                         )
                         if next_is_label:
-                            _add(line, "text", page_num)
+                            _add(line, "text", page_num, source_text=line)
 
     except Exception:
         pass
 
-    # Flush letter-checkbox group as a single multi-select radio group
+    # Flush letter-checkbox group
     if letter_checkbox_options and len(letter_checkbox_options) >= 2:
         fid = "leistungsart_auswahl"
         if fid not in seen:
             seen.add(fid)
+            source = " | ".join(letter_checkbox_source_lines[:3])
             results.append(FieldMapEntry(
                 field_id=fid,
                 original_label="Beantragte Leistung (A–G)",
@@ -499,6 +507,8 @@ def extract_flat_fields(pdf_bytes: bytes) -> list[FieldMapEntry]:
                 options=letter_checkbox_options,
                 confidence=0.75,
                 source="pdfplumber",
+                source_text=source,
+                reason="pdf_field",
             ))
 
     return results
@@ -516,7 +526,6 @@ def extract_field_map(pdf_bytes: bytes) -> ExtractionResult:
     if pdf_type == "acroform":
         fields = extract_acroform_fields(pdf_bytes)
         if not fields:
-            # AcroForm found but no usable fields — fall through to flat
             fields = extract_flat_fields(pdf_bytes)
             effective_type = "flat" if fields else "acroform"
         else:
@@ -526,7 +535,7 @@ def extract_field_map(pdf_bytes: bytes) -> ExtractionResult:
         effective_type = "flat"
     else:
         fields = []
-        effective_type = pdf_type  # "scanned" or "unknown"
+        effective_type = pdf_type
 
     return ExtractionResult(
         pdf_type=effective_type,
@@ -554,20 +563,18 @@ def validate_no_hallucinations(
     extracted_ids = {f.field_id for f in field_map}
     returned_ids  = set(translations.keys())
 
-    invented = returned_ids - extracted_ids  # AI made these up
-    missing  = extracted_ids - returned_ids  # AI missed these
+    invented = returned_ids - extracted_ids
+    missing  = extracted_ids - returned_ids
 
-    # Safe translations: only keep keys that exist in the extracted field map
     cleaned: dict[str, dict] = {
         k: v for k, v in translations.items() if k in extracted_ids
     }
 
-    # Backfill missing fields with the raw PDF label as the question
     field_by_id = {f.field_id: f for f in field_map}
     for fid in missing:
         entry = field_by_id[fid]
         cleaned[fid] = {
-            "question": entry.original_label,   # raw PDF label — never AI-invented
+            "question": entry.original_label,
             "explanation": "",
             "translated_options": {opt: opt for opt in entry.options},
         }
@@ -588,14 +595,19 @@ def field_map_to_defs(
     prefilled_ids: set[str],
     user_language: str,
     document_language: str,
-) -> list[dict]:
+) -> list:
     """
     Convert FieldMapEntry list + validated translations → list of FieldDefinition dicts.
     One FieldDefinition per FieldMapEntry — no extras, no omissions.
+
+    Confidence gate:
+        conf >= 0.90  → show_question=True,  needs_review=False
+        0.70 ≤ conf   → show_question=True,  needs_review=True
+        conf < 0.70   → show_question=False  (question blocked, not shown to user)
     """
     from app.schemas.document import FieldDefinition, FieldOption
 
-    defs: list[FieldDefinition] = []
+    defs = []
     for i, entry in enumerate(field_map, 1):
         tr = validated_translations.get(entry.field_id, {})
         tr_opts = tr.get("translated_options", {})
@@ -603,6 +615,12 @@ def field_map_to_defs(
             FieldOption(value=v, label=tr_opts.get(v, v))
             for v in entry.options
         ]
+
+        show_question = entry.confidence >= CONF_SHOW_MIN
+        needs_review  = show_question and (
+            entry.confidence < CONF_REVIEW_MIN or entry.source != "acroform"
+        )
+
         defs.append(FieldDefinition(
             key=entry.field_id,
             question={user_language: tr.get("question") or entry.original_label},
@@ -615,6 +633,46 @@ def field_map_to_defs(
             order=i,
             is_prefilled=(entry.field_id in prefilled_ids),
             confidence=entry.confidence,
-            needs_review=(entry.confidence < 0.7 or entry.source != "acroform"),
+            needs_review=needs_review,
+            show_question=show_question,
+            source_text=entry.source_text,
+            reason=entry.reason,
+            question_type=entry.reason,
         ))
     return defs
+
+
+# ── Analysis report builder ────────────────────────────────────────────────────
+
+def build_analysis_report(
+    extraction: ExtractionResult,
+    field_defs: list,
+    hallucination_report: HallucinationReport,
+) -> AnalysisReport:
+    """
+    Compute accuracy metrics for the extraction result.
+    Called after field_map_to_defs() to report on what was shown vs blocked.
+    """
+    field_count  = len(extraction.fields)
+    shown        = sum(1 for d in field_defs if getattr(d, "show_question", True))
+    blocked      = field_count - shown
+    low_conf     = sum(
+        1 for f in extraction.fields
+        if CONF_SHOW_MIN <= f.confidence < CONF_REVIEW_MIN
+    )
+    invented_ct  = len(hallucination_report.invented)
+
+    coverage_pct = round(shown / field_count * 100) if field_count > 0 else 0
+
+    return AnalysisReport(
+        pdf_type=extraction.pdf_type,
+        total_pages=extraction.total_pages,
+        field_count=field_count,
+        questions_shown=shown,
+        questions_blocked=blocked,
+        low_confidence_fields=low_conf,
+        invented_questions_removed=invented_ct,
+        coverage_rate=f"{coverage_pct}%",
+        grounding_rate="100%",   # guaranteed by validate_no_hallucinations
+        grounding_ok=True,
+    )

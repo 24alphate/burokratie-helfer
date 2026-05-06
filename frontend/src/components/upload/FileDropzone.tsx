@@ -12,6 +12,7 @@ interface FileDropzoneProps {
   locale: string;
   onUploadComplete: (response: UploadResponse) => void;
   onError: (message: string) => void;
+  onUploadStart?: () => void;
   uploadLabel: string;
   supportedLabel: string;
 }
@@ -22,6 +23,7 @@ export function FileDropzone({
   locale,
   onUploadComplete,
   onError,
+  onUploadStart,
   uploadLabel,
   supportedLabel,
 }: FileDropzoneProps) {
@@ -34,6 +36,7 @@ export function FileDropzone({
       if (!file) return;
       setFileName(file.name);
       setUploading(true);
+      onUploadStart?.();
       try {
         const result = await api.documents.upload(token, caseId, file, locale);
         onUploadComplete(result);
@@ -43,7 +46,7 @@ export function FileDropzone({
         setUploading(false);
       }
     },
-    [token, caseId, onUploadComplete, onError]
+    [token, caseId, onUploadComplete, onError, onUploadStart]
   );
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({

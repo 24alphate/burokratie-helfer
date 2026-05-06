@@ -5,117 +5,96 @@ import { useEffect, useState } from "react";
 import { Header } from "@/components/layout/Header";
 import { StepProgress } from "@/components/layout/StepProgress";
 import { FileDropzone } from "@/components/upload/FileDropzone";
-import { FormTypeSelector } from "@/components/upload/FormTypeSelector";
 import { useCaseStore } from "@/store/caseStore";
 import { api, API_BASE, isProductionWithoutApiUrl } from "@/lib/api";
-import { UploadResponse } from "@/types/api";
+import { AnalysisReport, UploadResponse } from "@/types/api";
 
 const T: Record<string, Record<string, string>> = {
-  upload_title:       { en: "Upload any fillable PDF form", ar: "ارفع أي نموذج PDF قابل للتعبئة", tr: "Herhangi bir doldurulabilir PDF yükleyin", de: "Beliebiges PDF-Formular hochladen" },
-  upload_instruction: { en: "Drag & drop any fillable PDF here — fields are read directly from your document.", ar: "اسحب أي نموذج PDF قابل للتعبئة هنا — تُقرأ الحقول مباشرة من مستندك.", tr: "Doldurulabilir herhangi bir PDF'yi buraya sürükleyin — alanlar doğrudan belgenizden okunur.", de: "Beliebiges ausfüllbares PDF hier ablegen — Felder werden direkt aus dem Dokument gelesen." },
-  supported:          { en: "Any fillable PDF (government forms, contracts, applications…)", ar: "أي نموذج PDF قابل للتعبئة (نماذج حكومية، عقود، طلبات...)", tr: "Her doldurulabilir PDF (resmi formlar, sözleşmeler, başvurular…)", de: "Jedes ausfüllbare PDF (Behördenformulare, Verträge, Anträge…)" },
-  detecting:          { en: "Detecting form type...", ar: "جارٍ التعرف على الاستمارة...", tr: "Form türü tespit ediliyor...", de: "Formular wird erkannt..." },
-  confirm:            { en: "Confirm & Continue", ar: "تأكيد ومتابعة", tr: "Onayla ve Devam Et", de: "Bestätigen & Weiter" },
-  select_prompt:      { en: "Please select your form type:", ar: "يرجى تحديد نوع الاستمارة:", tr: "Lütfen form türünüzü seçin:", de: "Bitte Formulartyp wählen:" },
+  upload_title:    { en: "Upload your PDF form", ar: "ارفع نموذج PDF", tr: "PDF formunuzu yükleyin", de: "PDF-Formular hochladen" },
+  upload_instr:    { en: "Drop any fillable PDF — fields are read directly from your document.", ar: "أسقط أي نموذج PDF — تُقرأ الحقول مباشرة من مستندك.", tr: "Doldurulabilir PDF'yi bırakın — alanlar doğrudan belgenizden okunur.", de: "Beliebiges PDF ablegen — Felder werden direkt gelesen." },
+  supported:       { en: "Any fillable PDF (government forms, contracts, applications…)", ar: "أي نموذج PDF قابل للتعبئة", tr: "Her doldurulabilir PDF", de: "Jedes ausfüllbare PDF" },
+  analysing:       { en: "Reading your PDF…", ar: "جارٍ قراءة ملف PDF…", tr: "PDF okunuyor…", de: "PDF wird gelesen…" },
+  analysing_sub:   { en: "Extracting fields and translating questions. This takes a few seconds.", ar: "استخراج الحقول وترجمة الأسئلة. هذا يستغرق بضع ثوانٍ.", tr: "Alanlar ayıklanıyor ve sorular çevriliyor. Bu birkaç saniye sürer.", de: "Felder werden extrahiert und Fragen übersetzt. Das dauert einige Sekunden." },
+  no_fields:       { en: "No fillable fields found in this PDF.", ar: "لم يتم العثور على حقول قابلة للتعبئة في هذا PDF.", tr: "Bu PDF'de doldurulabilir alan bulunamadı.", de: "Keine ausfüllbaren Felder in dieser PDF gefunden." },
+  blocked_warn:    { en: "fields could not be verified (low confidence) and were excluded.", ar: "حقول لم يمكن التحقق منها واستُبعدت.", tr: "alan doğrulanamadı ve dışlandı.", de: "Felder konnten nicht verifiziert werden und wurden ausgeschlossen." },
 };
 
 function t(key: string, locale: string): string {
   return T[key]?.[locale] ?? T[key]?.["en"] ?? key;
 }
 
+type Stage = "idle" | "uploading" | "analysing" | "done" | "error";
+
 export default function UploadPage({ params }: { params: { locale: string } }) {
   const { locale } = params;
   const router = useRouter();
-  const { sessionToken, caseId, setLocale, setFields, mergeTranslations } = useCaseStore();
-  const [mounted, setMounted]           = useState(false);
-  const [uploadResult, setUploadResult] = useState<UploadResponse | null>(null);
-  const [error, setError]               = useState<string | null>(null);
-  const [apiWarning, setApiWarning]     = useState<string | null>(null);
-  const [confirming, setConfirming]     = useState(false);
+  const { sessionToken, caseId, setLocale, setFields } = useCaseStore();
+  const [mounted, setMounted]         = useState(false);
+  const [stage, setStage]             = useState<Stage>("idle");
+  const [error, setError]             = useState<string | null>(null);
+  const [apiWarning, setApiWarning]   = useState<string | null>(null);
+  const [report, setReport]           = useState<AnalysisReport | null>(null);
+
+  useEffect(() => { setMounted(true); setLocale(locale); }, [locale, setLocale]);
 
   useEffect(() => {
-    setMounted(true);
-    setLocale(locale);
-  }, [locale, setLocale]);
-
-  useEffect(() => {
-    if (mounted && (!sessionToken || !caseId)) {
-      router.replace("/");
-    }
+    if (mounted && (!sessionToken || !caseId)) router.replace("/");
   }, [mounted, sessionToken, caseId, router]);
 
-  // Warn early when NEXT_PUBLIC_API_URL is missing in production
   useEffect(() => {
     if (!mounted) return;
     if (isProductionWithoutApiUrl()) {
       setApiWarning(
-        `API not configured. Set NEXT_PUBLIC_API_URL in your Vercel frontend environment variables ` +
-        `and redeploy. Currently calling: ${API_BASE}`
+        `API not configured. Set NEXT_PUBLIC_API_URL in Vercel frontend env vars. Currently: ${API_BASE}`
       );
     }
   }, [mounted]);
 
-  async function handleConfirm(templateId: string) {
+  async function handleUploadComplete(uploadResult: UploadResponse) {
+    // uploadResult.fields is intentionally [] — the upload route returns no questions.
+    // We must call extractPdfFields and AWAIT it before navigating.
     if (!sessionToken || !caseId) return;
-    setConfirming(true);
+
+    setStage("analysing");
+    setError(null);
+
     try {
-      await api.cases.setFormType(sessionToken, caseId, templateId);
-      router.push(`/${locale}/questions`);
+      const extracted = await api.documents.extractPdfFields(sessionToken, caseId, locale);
+
+      if (!extracted.fields || extracted.fields.length === 0) {
+        setError(t("no_fields", locale));
+        setStage("error");
+        return;
+      }
+
+      // Only keep fields where show_question is not explicitly false
+      const showableFields = extracted.fields.filter(
+        (f) => f.show_question !== false
+      );
+
+      if (showableFields.length === 0) {
+        setError(t("no_fields", locale));
+        setStage("error");
+        return;
+      }
+
+      setFields(showableFields);
+      setReport(extracted.analysis_report ?? null);
+      setStage("done");
+
+      // Navigate to questions after a short delay so user can see the report
+      setTimeout(() => router.push(`/${locale}/questions`), 1200);
+
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Failed to confirm form type.");
-    } finally {
-      setConfirming(false);
+      const msg = e instanceof Error ? e.message : "Failed to analyse PDF.";
+      // 422 = no extractable fields — not a crash, show friendly message
+      if (msg.includes("422") || msg.toLowerCase().includes("no field")) {
+        setError(t("no_fields", locale));
+      } else {
+        setError(msg);
+      }
+      setStage("error");
     }
-  }
-
-  async function handleUploadComplete(result: UploadResponse) {
-    if (result.fields?.length) {
-      setFields(result.fields);
-    }
-    setUploadResult(result);
-
-    if (sessionToken && caseId) {
-      // Fire-and-forget: extract real AcroForm fields from the PDF in background.
-      // Upload already returned with generic fixed-template fields;
-      // this replaces them with the actual PDF fields once extraction completes.
-      api.documents
-        .extractPdfFields(sessionToken, caseId, locale)
-        .then((extracted) => {
-          if (extracted.fields?.length) {
-            setFields(extracted.fields);
-          }
-          // Translate option labels if locale is not natively supported
-          if (!["en", "de", "ar", "tr"].includes(locale) && extracted.fields?.length) {
-            const fieldsForTranslation = extracted.fields.map((f) => ({
-              field_name: f.key,
-              field_type: f.input_type,
-              options: f.options.map((o) => o.value),
-            }));
-            api.documents
-              .translateFields(sessionToken!, caseId!, locale, fieldsForTranslation)
-              .then((translations) => mergeTranslations(translations, locale))
-              .catch(() => {});
-          }
-        })
-        .catch(() => {
-          // PDF had no AcroForm fields — fixed template questions stay
-          // This is not an error from the user's perspective
-        });
-    }
-
-    if (!result.requires_manual_selection && result.detected_form_type) {
-      await handleConfirm(result.detected_form_type);
-    }
-  }
-
-  const prefilledMsg: Record<string, (n: number) => string> = {
-    en: (n) => `✓ Form detected. ${n > 0 ? `${n} fields pre-filled from your document.` : "No pre-filled data — you will answer all questions."}`,
-    ar: (n) => `✓ تم التعرف على الاستمارة. ${n > 0 ? `تم ملء ${n} حقل تلقائياً.` : "لم يتم العثور على بيانات مملوءة — ستجيب على جميع الأسئلة."}`,
-    tr: (n) => `✓ Form tespit edildi. ${n > 0 ? `${n} alan otomatik dolduruldu.` : "Önceden doldurulmuş veri yok — tüm soruları yanıtlayacaksınız."}`,
-    de: (n) => `✓ Formular erkannt. ${n > 0 ? `${n} Felder wurden vorausgefüllt.` : "Keine vorausgefüllten Daten — Sie beantworten alle Fragen."}`,
-  };
-  function getPrefilledMsg(n: number) {
-    return (prefilledMsg[locale] ?? prefilledMsg.en)(n);
   }
 
   if (!mounted) return null;
@@ -128,43 +107,118 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
         <StepProgress currentStep={0} />
         <h1 className="text-2xl font-bold text-gray-900 mb-6">{t("upload_title", locale)}</h1>
 
-        {/* Misconfiguration warning — shown in production when API URL is missing */}
+        {/* Misconfiguration warning */}
         {apiWarning && (
           <div className="mb-4 p-3 bg-amber-50 border border-amber-300 rounded-lg text-amber-800 text-sm font-mono break-all">
             ⚙ {apiWarning}
           </div>
         )}
 
-        {/* Upload / API error */}
+        {/* Error */}
         {error && (
           <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
             {error}
+            {stage === "error" && (
+              <button
+                className="ml-3 underline text-red-600"
+                onClick={() => { setStage("idle"); setError(null); }}
+              >
+                Try again
+              </button>
+            )}
           </div>
         )}
 
-        {!uploadResult ? (
+        {/* Idle: show dropzone */}
+        {stage === "idle" && (
           <FileDropzone
             token={sessionToken}
             caseId={caseId}
             locale={locale}
             onUploadComplete={handleUploadComplete}
-            onError={setError}
-            uploadLabel={t("upload_instruction", locale)}
+            onError={(msg) => { setError(msg); setStage("error"); }}
+            onUploadStart={() => setStage("uploading")}
+            uploadLabel={t("upload_instr", locale)}
             supportedLabel={t("supported", locale)}
           />
-        ) : uploadResult.requires_manual_selection ? (
-          <FormTypeSelector
-            onSelect={handleConfirm}
-            prompt={t("select_prompt", locale)}
-            confirmLabel={confirming ? "..." : t("confirm", locale)}
-          />
-        ) : (
-          <div className="text-center py-8">
-            <div className="text-4xl mb-3">🔍</div>
-            <p className="text-brand-600 text-lg font-semibold mb-2">
-              {getPrefilledMsg(uploadResult.prefilled_fields)}
+        )}
+
+        {/* Uploading */}
+        {stage === "uploading" && (
+          <div className="text-center py-16">
+            <div className="animate-spin text-4xl mb-4">⏳</div>
+            <p className="text-gray-500">Uploading…</p>
+          </div>
+        )}
+
+        {/* Analysing: extractPdfFields in progress */}
+        {stage === "analysing" && (
+          <div className="text-center py-16">
+            <div className="animate-spin text-4xl mb-4">🔍</div>
+            <p className="text-lg font-semibold text-brand-600 mb-2">
+              {t("analysing", locale)}
             </p>
-            <p className="text-gray-400 text-sm">{t("detecting", locale)}</p>
+            <p className="text-sm text-gray-400">{t("analysing_sub", locale)}</p>
+          </div>
+        )}
+
+        {/* Done: show accuracy report before navigating */}
+        {stage === "done" && report && (
+          <div className="py-8">
+            <div className="text-center mb-6">
+              <div className="text-4xl mb-3">✅</div>
+              <p className="text-lg font-semibold text-green-700">
+                {report.questions_shown} question{report.questions_shown !== 1 ? "s" : ""} found
+              </p>
+              <p className="text-sm text-gray-400">Redirecting to questions…</p>
+            </div>
+
+            {/* Accuracy report table */}
+            <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 text-sm">
+              <h3 className="font-semibold text-gray-700 mb-3 text-xs uppercase tracking-wide">
+                Extraction report
+              </h3>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-gray-600">
+                <span>PDF type</span>
+                <span className="font-mono">{report.pdf_type}</span>
+                <span>Pages</span>
+                <span className="font-mono">{report.total_pages}</span>
+                <span>Fields extracted</span>
+                <span className="font-mono">{report.field_count}</span>
+                <span>Questions shown</span>
+                <span className="font-mono text-green-700">{report.questions_shown}</span>
+                {report.questions_blocked > 0 && (
+                  <>
+                    <span>Blocked (low confidence)</span>
+                    <span className="font-mono text-amber-600">{report.questions_blocked}</span>
+                  </>
+                )}
+                {report.low_confidence_fields > 0 && (
+                  <>
+                    <span>Needs review</span>
+                    <span className="font-mono text-yellow-600">{report.low_confidence_fields}</span>
+                  </>
+                )}
+                {report.invented_questions_removed > 0 && (
+                  <>
+                    <span>Invented (removed)</span>
+                    <span className="font-mono text-red-600">{report.invented_questions_removed}</span>
+                  </>
+                )}
+                <span>Grounding rate</span>
+                <span className="font-mono text-green-700 font-bold">{report.grounding_rate}</span>
+                <span>Coverage rate</span>
+                <span className="font-mono">{report.coverage_rate}</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Done without report */}
+        {stage === "done" && !report && (
+          <div className="text-center py-16">
+            <div className="text-4xl mb-3">✅</div>
+            <p className="text-sm text-gray-400">Redirecting…</p>
           </div>
         )}
       </main>
