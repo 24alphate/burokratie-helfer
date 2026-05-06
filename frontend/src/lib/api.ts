@@ -82,6 +82,18 @@ export const api = {
         body: JSON.stringify({ fields }),
       }),
 
+    extractPdfFields: (
+      token: string,
+      caseId: string,
+      userLanguage: string,
+      documentLanguage = "de",
+    ): Promise<UploadResponse> =>
+      request(`/cases/${caseId}/extract-pdf-fields?user_language=${userLanguage}&document_language=${documentLanguage}`, {
+        method: "POST",
+        token,
+        body: JSON.stringify({}),
+      }),
+
     upload: async (token: string, caseId: string, file: File, userLanguage = "en", documentLanguage = "de"): Promise<UploadResponse> => {
       const form = new FormData();
       form.append("file", file);

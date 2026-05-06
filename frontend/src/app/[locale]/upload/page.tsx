@@ -59,22 +59,35 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
   async function handleUploadComplete(result: UploadResponse) {
     if (result.fields?.length) {
       setFields(result.fields);
-
-      // Fire-and-forget: ask Groq to translate into user's language.
-      // Upload returns immediately with static English; this enriches it in background.
-      if (sessionToken && caseId && !["en", "de", "ar", "tr"].includes(locale)) {
-        const fieldsForTranslation = result.fields.map((f) => ({
-          field_name: f.key,
-          field_type: f.input_type,
-          options: f.options.map((o) => o.value),
-        }));
-        api.documents
-          .translateFields(sessionToken, caseId, locale, fieldsForTranslation)
-          .then((translations) => mergeTranslations(translations, locale))
-          .catch(() => {/* silently use static fallback */});
-      }
     }
     setUploadResult(result);
+
+    if (sessionToken && caseId) {
+      // Fire-and-forget: extract real AcroForm fields from the PDF.
+      // Upload returned immediately with generic fixed-template fields;
+      // this replaces them with the PDF's actual field list once ready.
+      api.documents
+        .extractPdfFields(sessionToken, caseId, locale)
+        .then((extracted) => {
+          if (extracted.fields?.length) {
+            setFields(extracted.fields);
+          }
+          // Also translate into user's language if needed
+          if (!["en", "de", "ar", "tr"].includes(locale) && extracted.fields?.length) {
+            const fieldsForTranslation = extracted.fields.map((f) => ({
+              field_name: f.key,
+              field_type: f.input_type,
+              options: f.options.map((o) => o.value),
+            }));
+            api.documents
+              .translateFields(sessionToken!, caseId!, locale, fieldsForTranslation)
+              .then((translations) => mergeTranslations(translations, locale))
+              .catch(() => {});
+          }
+        })
+        .catch(() => {/* PDF had no AcroForm — fixed template fields stay */});
+    }
+
     if (!result.requires_manual_selection && result.detected_form_type) {
       await handleConfirm(result.detected_form_type);
     }
