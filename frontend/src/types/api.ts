@@ -22,12 +22,22 @@ export type CaseStatus =
   | "review"
   | "completed";
 
+export interface FieldDefinition {
+  key: string;
+  question: Record<string, string>;    // {locale: question text}
+  explanation: Record<string, string>;
+  input_type: "text" | "date" | "yes_no" | "select";
+  order: number;
+  is_prefilled: boolean;
+}
+
 export interface UploadResponse {
   document_id: string;
   detected_form_type: string | null;
   confidence: number;
   requires_manual_selection: boolean;
   prefilled_fields: number;
+  fields: FieldDefinition[];
 }
 
 export interface OptionRead {

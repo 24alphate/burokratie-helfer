@@ -22,3 +22,11 @@ class OCRService(ABC):
     async def detect_form_type(self, ocr_result: OCRResult) -> Optional[str]:
         """Return a FormTemplate ID if the document matches a known form, else None."""
         ...
+
+    async def detect_all_fields(self, file_bytes: bytes) -> list[dict]:
+        """
+        Detect ALL visible form fields from the document (including empty ones).
+        Returns list of {label, value, field_type} dicts.
+        Default: returns [] (subclasses override for real detection).
+        """
+        return []

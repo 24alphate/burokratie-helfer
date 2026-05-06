@@ -28,3 +28,14 @@ class MockOCRService(OCRService):
 
     async def detect_form_type(self, ocr_result: OCRResult) -> Optional[str]:
         return ocr_result.detected_form_type
+
+    async def detect_all_fields(self, file_bytes: bytes) -> list[dict]:
+        return [
+            {"label": "Vorname",          "value": "Max",         "field_type": "text"},
+            {"label": "Familienname",     "value": "Mustermann",  "field_type": "text"},
+            {"label": "Geburtsdatum",     "value": None,          "field_type": "date"},
+            {"label": "Straße",           "value": None,          "field_type": "text"},
+            {"label": "Postleitzahl",     "value": None,          "field_type": "text"},
+            {"label": "Ort",              "value": None,          "field_type": "text"},
+            {"label": "IBAN",             "value": None,          "field_type": "text"},
+        ]

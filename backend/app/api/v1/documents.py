@@ -16,10 +16,11 @@ from app.models.audit_log import AuditAction
 from app.models.case import Case, CaseStatus
 from app.models.document import UploadedDocument
 from app.models.form_template import FormField, FormTemplate
+from app.models.question import Question
 from app.models.user import User
-from app.schemas.document import UploadResponse
+from app.schemas.document import FieldDefinition, UploadResponse
 from app.services.audit_service import audit_service
-from app.services.dynamic_form_service import create_dynamic_template
+from app.services.dynamic_form_service import create_dynamic_template, make_question_for_field
 from app.services.validation_service import validation_service
 
 router = APIRouter(prefix="/cases", tags=["documents"])
@@ -30,18 +31,14 @@ MAX_SIZE_BYTES = settings.max_upload_size_mb * 1024 * 1024
 # ── AcroForm extraction ────────────────────────────────────────────────────────
 
 def _extract_acroform_fields(pdf_bytes: bytes) -> dict[str, str]:
-    """
-    Extract every AcroForm widget field from a digital PDF.
-    Returns {widget_name: current_value} — value is "" for empty fields.
-    """
+    """Extract every AcroForm widget from a digital PDF. Returns {name: value_or_empty}."""
     try:
         reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
-        raw_fields = reader.get_fields()
-        if not raw_fields:
+        raw = reader.get_fields()
+        if not raw:
             return {}
-
         result: dict[str, str] = {}
-        for name, field in raw_fields.items():
+        for name, field in raw.items():
             clean = name.lstrip("/").strip()
             val = field.get("/V") or field.get("/DV") or ""
             if hasattr(val, "raw_value"):
@@ -50,7 +47,7 @@ def _extract_acroform_fields(pdf_bytes: bytes) -> dict[str, str]:
             if val in ("/Off", "Off", "/No", "No"):
                 val = "no"
             elif val.startswith("/"):
-                val = val[1:]  # strip leading slash from /Yes, /Ja, etc.
+                val = val[1:]
             elif val in ("None", "none", "null"):
                 val = ""
             result[clean] = val
@@ -59,38 +56,24 @@ def _extract_acroform_fields(pdf_bytes: bytes) -> dict[str, str]:
         return {}
 
 
-# ── Helpers for fallback (fixed-template) path ───────────────────────────────
+# ── Field definition builder ──────────────────────────────────────────────────
 
-def _build_reverse_map(pdf_field_map: dict[str, str]) -> dict[str, str]:
-    reverse: dict[str, str] = {}
-    for field_key, pdf_name in pdf_field_map.items():
-        reverse[pdf_name] = field_key
-        reverse[pdf_name.lower()] = field_key
-        plain = re.sub(r"[^a-z0-9]", "", pdf_name.lower())
-        if plain:
-            reverse[plain] = field_key
-    return reverse
-
-
-def _match_to_template(
-    acroform: dict[str, str],
-    reverse_map: dict[str, str],
-) -> dict[str, str]:
-    matched: dict[str, str] = {}
-    for pdf_name, value in acroform.items():
-        if not value:
-            continue
-        fk = (reverse_map.get(pdf_name)
-              or reverse_map.get(pdf_name.lower())
-              or reverse_map.get(re.sub(r"[^a-z0-9]", "", pdf_name.lower())))
-        if not fk:
-            for key, candidate in reverse_map.items():
-                if len(key) >= 4 and key in pdf_name.lower():
-                    fk = candidate
-                    break
-        if fk:
-            matched[fk] = value
-    return matched
+def _build_field_definitions(
+    field_names: list[str],
+    prefilled_keys: set[str],
+) -> list[FieldDefinition]:
+    defs = []
+    for i, name in enumerate(field_names, 1):
+        q = make_question_for_field(name)
+        defs.append(FieldDefinition(
+            key=name,
+            question=q["question_text"],
+            explanation=q["explanation_text"],
+            input_type=q["input_type"],
+            order=i,
+            is_prefilled=(name in prefilled_keys),
+        ))
+    return defs
 
 
 # ── Upload route ───────────────────────────────────────────────────────────────
@@ -121,73 +104,102 @@ async def upload_document(
     dest = upload_dir / f"{file_id}{suffix}"
     dest.write_bytes(content)
 
-    is_pdf = content[:4] == b"%PDF"
+    form_name = Path(file.filename or "Uploaded Form").stem.replace("_", " ").title()
+    ocr_service = request.app.state.ocr_service
+    translation_service = request.app.state.translation_service
 
-    # ── Path A: AcroForm-based PDF (any fillable form) ────────────────────────
-    # Read the PDF's own field structure — no AI, no template needed.
+    # ── Path A: fillable PDF with AcroForm fields ─────────────────────────────
+    is_pdf = content[:4] == b"%PDF"
     acroform_raw: dict[str, str] = {}
     if is_pdf:
         acroform_raw = _extract_acroform_fields(content)
 
     if acroform_raw:
-        # Create a case-specific dynamic template from the PDF's own fields
-        template_id, prefilled_from_pdf = create_dynamic_template(
-            db=db,
-            case_id=case_id,
-            acroform_fields=acroform_raw,
-            form_name=Path(file.filename or "Uploaded Form").stem.replace("_", " ").title(),
+        template_id, prefilled_from_acroform = create_dynamic_template(
+            db=db, case_id=case_id,
+            acroform_fields=acroform_raw, form_name=form_name,
         )
-
-        # Also run OCR in parallel to enrich pre-filling (fills scanned parts)
-        ocr_service = request.app.state.ocr_service
-        ocr_result = await ocr_service.extract_text(content)
-        # Merge: PDF AcroForm values override OCR guesses
-        extracted = dict(ocr_result.metadata.get("extracted_fields", {}))
-        extracted.update(prefilled_from_pdf)  # AcroForm wins
-
         case.form_template_id = template_id
         case.status = CaseStatus.FORM_SELECTED.value
         case.updated_at = datetime.now(timezone.utc)
 
         doc = UploadedDocument(
-            case_id=case_id,
-            original_filename=file.filename or "upload",
-            storage_path=str(dest),
-            ocr_text=None,
-            detected_form_type=template_id,
-            ocr_confidence=1.0,
+            case_id=case_id, original_filename=file.filename or "upload",
+            storage_path=str(dest), ocr_text=None,
+            detected_form_type=template_id, ocr_confidence=1.0,
             uploaded_at=datetime.now(timezone.utc),
         )
         db.add(doc)
         db.flush()
 
-        # Pre-fill Answer rows for all fields that had values in the PDF
-        prefilled_count = await _save_prefilled_answers(
-            db, case_id, template_id, extracted, request
+        prefilled_count = await _save_answers(
+            db, case_id, template_id, prefilled_from_acroform, translation_service
+        )
+
+        field_defs = _build_field_definitions(
+            list(acroform_raw.keys()), set(prefilled_from_acroform.keys())
         )
 
         audit_service.log(db, case_id, AuditAction.DOCUMENT_UPLOADED, {
-            "document_id": doc.id,
-            "mode": "acroform_dynamic",
-            "total_fields": len(acroform_raw),
-            "prefilled_fields": prefilled_count,
+            "document_id": doc.id, "mode": "acroform",
+            "total_fields": len(acroform_raw), "prefilled_fields": prefilled_count,
         })
         db.commit()
 
         return UploadResponse(
-            document_id=doc.id,
-            detected_form_type=template_id,
-            confidence=1.0,
-            requires_manual_selection=False,
-            prefilled_fields=prefilled_count,
+            document_id=doc.id, detected_form_type=template_id,
+            confidence=1.0, requires_manual_selection=False,
+            prefilled_fields=prefilled_count, fields=field_defs,
         )
 
-    # ── Path B: Non-AcroForm PDF / image (scanned form, fixed ALG II template) ─
-    ocr_service = request.app.state.ocr_service
+    # ── Path B: scanned / flat PDF — use vision to detect all fields ──────────
+    detected_fields: list[dict] = await ocr_service.detect_all_fields(content)
+
+    if detected_fields:
+        # Vision found fields → create dynamic template from visual form structure
+        acroform_style = {f["label"]: (f["value"] or "") for f in detected_fields}
+        template_id, prefilled_from_vision = create_dynamic_template(
+            db=db, case_id=case_id,
+            acroform_fields=acroform_style, form_name=form_name,
+        )
+        case.form_template_id = template_id
+        case.status = CaseStatus.FORM_SELECTED.value
+        case.updated_at = datetime.now(timezone.utc)
+
+        doc = UploadedDocument(
+            case_id=case_id, original_filename=file.filename or "upload",
+            storage_path=str(dest), ocr_text=None,
+            detected_form_type=template_id, ocr_confidence=0.85,
+            uploaded_at=datetime.now(timezone.utc),
+        )
+        db.add(doc)
+        db.flush()
+
+        prefilled_count = await _save_answers(
+            db, case_id, template_id, prefilled_from_vision, translation_service
+        )
+
+        field_defs = _build_field_definitions(
+            [f["label"] for f in detected_fields],
+            set(prefilled_from_vision.keys()),
+        )
+
+        audit_service.log(db, case_id, AuditAction.DOCUMENT_UPLOADED, {
+            "document_id": doc.id, "mode": "vision_dynamic",
+            "total_fields": len(detected_fields), "prefilled_fields": prefilled_count,
+        })
+        db.commit()
+
+        return UploadResponse(
+            document_id=doc.id, detected_form_type=template_id,
+            confidence=0.85, requires_manual_selection=False,
+            prefilled_fields=prefilled_count, fields=field_defs,
+        )
+
+    # ── Path C: fallback — fixed ALG II template (Groq offline / image not a form) ──
     ocr_result = await ocr_service.extract_text(content)
     detected_type = await ocr_service.detect_form_type(ocr_result)
 
-    # Auto-select the only available template when OCR is uncertain
     if not detected_type or ocr_result.confidence < 0.7:
         all_templates = db.query(FormTemplate).filter(
             ~FormTemplate.id.startswith("dyn_")
@@ -203,38 +215,40 @@ async def upload_document(
     case.updated_at = datetime.now(timezone.utc)
 
     doc = UploadedDocument(
-        case_id=case_id,
-        original_filename=file.filename or "upload",
-        storage_path=str(dest),
-        ocr_text=None,
-        detected_form_type=detected_type,
-        ocr_confidence=ocr_result.confidence,
+        case_id=case_id, original_filename=file.filename or "upload",
+        storage_path=str(dest), ocr_text=None,
+        detected_form_type=detected_type, ocr_confidence=ocr_result.confidence,
         uploaded_at=datetime.now(timezone.utc),
     )
     db.add(doc)
     db.flush()
 
     extracted = dict(ocr_result.metadata.get("extracted_fields", {}))
-
-    # Enrich with reverse-mapped AcroForm values (shouldn't be many since no fields found,
-    # but handle the edge case where a few were found but not enough to trigger Path A)
-    if acroform_raw and detected_type:
-        template = db.query(FormTemplate).filter_by(id=detected_type).first()
-        if template:
-            pdf_map = json.loads(template.pdf_field_map)
-            rev = _build_reverse_map(pdf_map)
-            acroform_matched = _match_to_template(acroform_raw, rev)
-            extracted.update(acroform_matched)
-
     prefilled_count = 0
-    if extracted and case.form_template_id:
-        prefilled_count = await _save_prefilled_answers(
-            db, case_id, case.form_template_id, extracted, request
+    field_defs: list[FieldDefinition] = []
+
+    if detected_type:
+        prefilled_count = await _save_answers(
+            db, case_id, detected_type, extracted, translation_service
         )
+        # Build field defs from the fixed template's questions
+        questions = db.query(Question).filter(
+            Question.template_id == detected_type
+        ).order_by(Question.order_index).all()
+        for q in questions:
+            qt = json.loads(q.question_text)
+            et = json.loads(q.explanation_text)
+            field_defs.append(FieldDefinition(
+                key=q.field_key,
+                question=qt,
+                explanation=et,
+                input_type=q.input_type,
+                order=q.order_index,
+                is_prefilled=(q.field_key in extracted and bool(extracted[q.field_key])),
+            ))
 
     audit_service.log(db, case_id, AuditAction.DOCUMENT_UPLOADED, {
-        "document_id": doc.id,
-        "mode": "ocr_fixed_template",
+        "document_id": doc.id, "mode": "fixed_template",
         "detected_form_type": detected_type,
         "confidence": round(ocr_result.confidence, 3),
         "prefilled_fields": prefilled_count,
@@ -242,59 +256,38 @@ async def upload_document(
     db.commit()
 
     return UploadResponse(
-        document_id=doc.id,
-        detected_form_type=detected_type,
+        document_id=doc.id, detected_form_type=detected_type,
         confidence=ocr_result.confidence,
         requires_manual_selection=not detected_type,
-        prefilled_fields=prefilled_count,
+        prefilled_fields=prefilled_count, fields=field_defs,
     )
 
 
-async def _save_prefilled_answers(
-    db: Session,
-    case_id: str,
-    template_id: str,
-    extracted: dict[str, str],
-    request,
+async def _save_answers(
+    db: Session, case_id: str, template_id: str,
+    extracted: dict[str, str], translation_service,
 ) -> int:
-    """Save extracted field values as pre-filled Answer rows. Returns count saved."""
     if not extracted:
         return 0
-
     fields = db.query(FormField).filter(FormField.template_id == template_id).all()
     valid_keys = {f.field_key: f for f in fields}
-    translation_service = request.app.state.translation_service
     count = 0
-
     for field_key, raw_value in extracted.items():
         if not raw_value or field_key not in valid_keys:
             continue
-
         field = valid_keys[field_key]
-        vresult = validation_service.validate_answer(
-            raw_value, field.validation_rules, language="de"
-        )
+        vresult = validation_service.validate_answer(raw_value, field.validation_rules, language="de")
         translation = await translation_service.translate(
-            raw_value, source_language="de", target_language="de",
-            field_context=field_key,
+            raw_value, source_language="de", target_language="de", field_context=field_key,
         )
-
         db.query(Answer).filter(
-            Answer.case_id == case_id,
-            Answer.field_key == field_key,
-            Answer.is_active == True,
+            Answer.case_id == case_id, Answer.field_key == field_key, Answer.is_active == True,
         ).update({"is_active": False})
-
         db.add(Answer(
-            case_id=case_id,
-            field_key=field_key,
-            raw_answer=raw_value,
+            case_id=case_id, field_key=field_key, raw_answer=raw_value,
             translated_answer=translation.translated_text,
-            is_validated=vresult.is_valid,
-            validation_errors=json.dumps(vresult.errors),
-            is_active=True,
-            answered_at=datetime.now(timezone.utc),
+            is_validated=vresult.is_valid, validation_errors=json.dumps(vresult.errors),
+            is_active=True, answered_at=datetime.now(timezone.utc),
         ))
         count += 1
-
     return count

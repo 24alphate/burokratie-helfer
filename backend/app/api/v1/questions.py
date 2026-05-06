@@ -87,20 +87,27 @@ async def submit_answer(
     if not case.form_template_id:
         raise HTTPException(status_code=400, detail="Form type not yet selected.")
 
-    # Validate: field_key must belong to this template
+    # Validate: field_key must belong to this template.
+    # For dynamic templates (dyn_*) the DB template may be gone after a Vercel cold start —
+    # in that case accept the answer without validation so the client-side flow keeps working.
     field = db.query(FormField).filter(
         FormField.template_id == case.form_template_id,
         FormField.field_key == payload.field_key,
     ).first()
-    if not field:
-        raise HTTPException(status_code=400, detail=f"Unknown field_key: {payload.field_key}")
 
-    # Run validation rules
-    vresult = validation_service.validate_answer(
-        payload.raw_answer,
-        field.validation_rules,
-        language=user.preferred_language,
-    )
+    if not field:
+        if case.form_template_id and case.form_template_id.startswith("dyn_"):
+            # Dynamic template lost — accept without DB validation
+            from types import SimpleNamespace
+            vresult = SimpleNamespace(is_valid=True, errors=[])
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown field_key: {payload.field_key}")
+    else:
+        vresult = validation_service.validate_answer(
+            payload.raw_answer,
+            field.validation_rules,
+            language=user.preferred_language,
+        )
 
     # Translate answer to German (via service layer — never raw AI output to PDF)
     translation_service = request.app.state.translation_service

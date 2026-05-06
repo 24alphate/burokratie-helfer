@@ -33,6 +33,31 @@ import instructor
 
 from app.services.ocr.base import OCRService, OCRResult
 
+# ── Universal field detection schema ──────────────────────────────────────────
+
+class DetectedField(BaseModel):
+    label: str = Field(..., description="The visible label of this form field")
+    value: Optional[str] = Field(None, description="Current filled value, null if empty")
+    field_type: str = Field("text", description="One of: text, date, checkbox")
+
+class UniversalFormFields(BaseModel):
+    detected_fields: list[DetectedField] = Field(
+        default_factory=list,
+        description="All visible form fields in document order, including empty ones"
+    )
+    confidence: float = Field(0.5, ge=0.0, le=1.0)
+
+FIELD_DETECT_PROMPT = (
+    "You are analyzing a document. Identify EVERY form field visible across all pages, in order.\n\n"
+    "For each field provide:\n"
+    '  "label": the visible label text (e.g. "Vorname", "Last Name", "Date of Birth")\n'
+    '  "value": the current value filled in — null if the field is blank/empty\n'
+    '  "field_type": "text" (default), "date", or "checkbox"\n\n'
+    "CRITICAL: Include ALL fields, even empty/blank ones. Do not skip any.\n"
+    "List them top-to-bottom, left-to-right, page by page.\n"
+    "If this is not a form, return an empty detected_fields list."
+)
+
 # ── Pydantic schema — defines the exact output shape ──────────────────────────
 
 class ExtractedFormFields(BaseModel):
@@ -448,3 +473,39 @@ class SmartOCRService(OCRService):
 
     async def detect_form_type(self, ocr_result: OCRResult) -> Optional[str]:
         return ocr_result.detected_form_type
+
+    async def detect_all_fields(self, file_bytes: bytes) -> list[dict]:
+        """
+        Detect ALL visible form fields from a document (AcroForm-independent).
+        Renders every page to an image and asks Groq to list fields + values.
+        Returns list of {label, value, field_type} dicts (value is None for empty fields).
+        """
+        if not self.groq_api_key or self.groq_api_key.startswith("REPLACE"):
+            return []
+        try:
+            mime = _detect_mime(file_bytes)
+            if mime == "application/pdf":
+                images = _pdf_to_image_bytes_all_pages(file_bytes, scale=2.0, max_pages=8)
+            else:
+                images = [file_bytes]
+
+            client = self._get_instructor_client()
+            content: list[dict] = []
+            for img in images:
+                b64 = _to_base64(img)
+                content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}})
+            content.append({"type": "text", "text": FIELD_DETECT_PROMPT})
+
+            result: UniversalFormFields = client.chat.completions.create(
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                response_model=UniversalFormFields,
+                max_retries=2,
+                messages=[{"role": "user", "content": content}],
+            )
+            return [
+                {"label": f.label, "value": f.value or None, "field_type": f.field_type}
+                for f in result.detected_fields
+                if f.label.strip()
+            ]
+        except Exception:
+            return []

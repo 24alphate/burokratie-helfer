@@ -26,7 +26,7 @@ function t(key: string, locale: string): string {
 export default function UploadPage({ params }: { params: { locale: string } }) {
   const { locale } = params;
   const router = useRouter();
-  const { sessionToken, caseId, setLocale } = useCaseStore();
+  const { sessionToken, caseId, setLocale, setFields } = useCaseStore();
   const [mounted, setMounted] = useState(false);
   const [uploadResult, setUploadResult] = useState<UploadResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -57,8 +57,11 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
   }
 
   async function handleUploadComplete(result: UploadResponse) {
+    // Persist field definitions to localStorage so questions page survives cold starts
+    if (result.fields?.length) {
+      setFields(result.fields);
+    }
     setUploadResult(result);
-    // If form detected with high confidence, auto-confirm and proceed
     if (!result.requires_manual_selection && result.detected_form_type) {
       await handleConfirm(result.detected_form_type);
     }
