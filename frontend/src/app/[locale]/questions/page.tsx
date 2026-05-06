@@ -52,15 +52,22 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
   const totalCount = questionFields.length;
   const prefillCount = fields.length - questionFields.length;
 
+  // Redirect to upload if no fields stored (session without upload, or stale store)
+  useEffect(() => {
+    if (mounted && sessionToken && caseId && fields.length === 0) {
+      router.replace(`/${locale}/upload`);
+    }
+  }, [mounted, sessionToken, caseId, fields.length, locale, router]);
+
   // Navigate to review when all questions answered
   useEffect(() => {
-    if (mounted && fields.length > 0 && nextField === null) {
+    if (mounted && fields.length > 0 && unanswered.length === 0) {
       router.push(`/${locale}/review`);
     }
-  }, [mounted, fields.length, nextField, locale, router]);
+  }, [mounted, fields.length, unanswered.length, locale, router]);
 
   async function handleAnswer(rawAnswer: string) {
-    if (!nextField) return;
+    if (!nextField || !sessionToken || !caseId) return;
     setIsLoading(true);
     setSubmitError(null);
     try {
