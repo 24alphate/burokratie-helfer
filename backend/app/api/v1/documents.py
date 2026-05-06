@@ -59,34 +59,6 @@ def _acroform_field_type(ft: str, flags: int) -> Optional[str]:
     return "text"
 
 
-def _collect_radio_options(reader: pypdf.PdfReader) -> dict[str, list[str]]:
-    opts: dict[str, list[str]] = {}
-    for page in reader.pages:
-        for ref in page.get("/Annots", []):
-            try:
-                ann = ref.get_object() if hasattr(ref, "get_object") else ref
-                parent_ref = ann.get("/Parent")
-                parent = (parent_ref.get_object()
-                          if hasattr(parent_ref, "get_object") else parent_ref) if parent_ref else None
-                fname = str((parent or ann).get("/T", "")).strip().lstrip("/")
-                if not fname:
-                    continue
-                ap = ann.get("/AP", {})
-                if hasattr(ap, "get_object"):
-                    ap = ap.get_object()
-                normal = ap.get("/N", {}) if ap else {}
-                if hasattr(normal, "get_object"):
-                    normal = normal.get_object()
-                for key in (normal.keys() if hasattr(normal, "keys") else []):
-                    val = str(key).lstrip("/")
-                    if val and val.lower() != "off":
-                        opts.setdefault(fname, [])
-                        if val not in opts[fname]:
-                            opts[fname].append(val)
-            except Exception:
-                continue
-    return opts
-
 
 def _extract_acroform_full(pdf_bytes: bytes) -> list[dict]:
     """Ground-truth extraction. Every returned field IS in the PDF. No network calls."""
@@ -95,12 +67,14 @@ def _extract_acroform_full(pdf_bytes: bytes) -> list[dict]:
         raw = reader.get_fields()
         if not raw:
             return []
-        radio_opts = _collect_radio_options(reader)
         results: list[dict] = []
         for name, field in raw.items():
             clean = name.lstrip("/").strip()
             ft    = str(field.get("/FT", "/Tx"))
-            flags = int(str(field.get("/Ff", "0")).strip() or "0")
+            try:
+                flags = int(str(field.get("/Ff", "0")).strip().split(".")[0] or "0")
+            except (ValueError, TypeError):
+                flags = 0
             ftype = _acroform_field_type(ft, flags)
             if ftype is None:
                 continue
@@ -114,11 +88,12 @@ def _extract_acroform_full(pdf_bytes: bytes) -> list[dict]:
                 val = val[1:]
             options: list[str] = []
             if ftype in ("select", "multiselect"):
-                raw_opts = field.get("/Opt", [])
-                for o in (raw_opts if isinstance(raw_opts, list) else []):
-                    options.append(str(o[0]) if isinstance(o, (list, tuple)) else str(o))
-            elif ftype in ("radio", "checkbox"):
-                options = radio_opts.get(clean, [])
+                try:
+                    raw_opts = field.get("/Opt", [])
+                    for o in (raw_opts if isinstance(raw_opts, list) else []):
+                        options.append(str(o[0]) if isinstance(o, (list, tuple)) else str(o))
+                except Exception:
+                    options = []
             results.append({
                 "field_name": clean, "field_type": ftype,
                 "current_value": val, "options": options,
@@ -199,46 +174,50 @@ async def upload_document(
         extracted_fields = _extract_acroform_full(content)
 
     if extracted_fields:
-        translations   = static_fallback(extracted_fields, user_language)
-        prefilled_raw  = {f["field_name"]: f["current_value"]
-                          for f in extracted_fields if f["current_value"]}
+        try:
+            translations   = static_fallback(extracted_fields, user_language)
+            prefilled_raw  = {f["field_name"]: f["current_value"]
+                              for f in extracted_fields if f["current_value"]}
 
-        template_id, _ = create_dynamic_template(
-            db=db, case_id=case_id,
-            acroform_fields={f["field_name"]: f["current_value"] for f in extracted_fields},
-            form_name=form_name,
-        )
-        case.form_template_id = template_id
-        case.status           = CaseStatus.FORM_SELECTED.value
-        case.updated_at       = datetime.now(timezone.utc)
+            template_id, _ = create_dynamic_template(
+                db=db, case_id=case_id,
+                acroform_fields={f["field_name"]: f["current_value"] for f in extracted_fields},
+                form_name=form_name,
+            )
+            case.form_template_id = template_id
+            case.status           = CaseStatus.FORM_SELECTED.value
+            case.updated_at       = datetime.now(timezone.utc)
 
-        doc = UploadedDocument(
-            case_id=case_id, original_filename=file.filename or "upload",
-            storage_path=str(dest), ocr_text=None,
-            detected_form_type=template_id, ocr_confidence=1.0,
-            uploaded_at=datetime.now(timezone.utc),
-        )
-        db.add(doc)
-        db.flush()
+            doc = UploadedDocument(
+                case_id=case_id, original_filename=file.filename or "upload",
+                storage_path=str(dest), ocr_text=None,
+                detected_form_type=template_id, ocr_confidence=1.0,
+                uploaded_at=datetime.now(timezone.utc),
+            )
+            db.add(doc)
+            db.flush()
 
-        prefilled_count = await _save_answers(
-            db, case_id, template_id, prefilled_raw, trans_svc
-        )
-        field_defs = _build_field_defs(
-            extracted_fields, translations,
-            set(prefilled_raw.keys()), user_language, document_language, 1.0,
-        )
-        audit_service.log(db, case_id, AuditAction.DOCUMENT_UPLOADED, {
-            "document_id": doc.id, "mode": "acroform",
-            "total_fields": len(extracted_fields), "prefilled_fields": prefilled_count,
-        })
-        db.commit()
-        return UploadResponse(
-            document_id=doc.id, detected_form_type=template_id,
-            confidence=1.0, requires_manual_selection=False,
-            prefilled_fields=prefilled_count, fields=field_defs,
-            document_language=document_language, user_language=user_language,
-        )
+            prefilled_count = await _save_answers(
+                db, case_id, template_id, prefilled_raw, trans_svc
+            )
+            field_defs = _build_field_defs(
+                extracted_fields, translations,
+                set(prefilled_raw.keys()), user_language, document_language, 1.0,
+            )
+            audit_service.log(db, case_id, AuditAction.DOCUMENT_UPLOADED, {
+                "document_id": doc.id, "mode": "acroform",
+                "total_fields": len(extracted_fields), "prefilled_fields": prefilled_count,
+            })
+            db.commit()
+            return UploadResponse(
+                document_id=doc.id, detected_form_type=template_id,
+                confidence=1.0, requires_manual_selection=False,
+                prefilled_fields=prefilled_count, fields=field_defs,
+                document_language=document_language, user_language=user_language,
+            )
+        except Exception:
+            db.rollback()
+            extracted_fields = []  # fall through to Path B
 
     # ── Path B: no AcroForm — use fixed template from DB (no LLM) ────────────
     # Scanned / image PDFs land here. OCR/vision runs via /translate-fields later.
