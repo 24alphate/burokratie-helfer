@@ -15,10 +15,21 @@ The pdf_token is stored by the frontend (Zustand localStorage) and sent with
 POST /fill-pdf when the user is ready to generate the filled document.
 
 No database writes.  No file system writes.  Cold-start-proof.
+
+Diagnostic query parameters
+-----------------------------
+no_ai=true   Bypass Groq completely. Uses the raw PDF label as the question text.
+             Use this to isolate whether wrong questions come from extraction or AI.
+
+The response always includes:
+  raw_extracted_fields  — field map BEFORE translation (extraction ground truth)
+  ai_comparison         — side-by-side original_label vs AI question for every field
+  ai_used               — whether Groq was attempted (false when no_ai=true or key missing)
 """
 from __future__ import annotations
 
 import logging
+import os
 from typing import Optional
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
@@ -33,7 +44,7 @@ from app.services.pdf_pipeline import (
     validate_no_hallucinations,
 )
 from app.services.pdf_token import sign_pdf_token
-from app.services.question_translator import translate_fields
+from app.services.question_translator import translate_fields, static_fallback
 
 log = logging.getLogger("burokratie.process_pdf")
 
@@ -42,12 +53,47 @@ router = APIRouter(tags=["stateless"])
 MAX_SIZE_BYTES = settings.max_upload_size_mb * 1024 * 1024
 
 
+# ── Diagnostic response models ────────────────────────────────────────────────
+
+class RawFieldEntry(BaseModel):
+    """One extracted field BEFORE AI translation. This is the extraction ground truth."""
+    field_id: str
+    original_label: str
+    field_type: str
+    source_page: int
+    source_text: str
+    confidence: float
+    source: str            # "acroform" | "pdfplumber" | "ocr"
+    bbox: Optional[list[float]] = None
+    options: list[str] = []
+    reason: str            # "pdf_field" | "derived_helper"
+
+
+class AIComparisonEntry(BaseModel):
+    """Side-by-side original label vs AI-generated question for one field."""
+    field_id: str
+    original_label: str    # raw PDF label (ground truth)
+    ai_question: str       # what AI returned (or original_label if no_ai=true / fallback)
+    ai_explanation: str
+    confidence: float
+    ai_used: bool          # False when no_ai=true or Groq fell back to static
+
+
 class ProcessPdfResponse(BaseModel):
     fields: list[FieldDefinition] = []
     extracted_field_ids: list[str] = []
     pdf_token: str
     analysis_report: Optional[AnalysisReport] = None
     filename: str = ""
+    # ── Diagnostic data — always populated ───────────────────────────────────
+    # raw_extracted_fields: the field map BEFORE translation.
+    #   Compare this with `fields` to see what AI changed.
+    raw_extracted_fields: list[RawFieldEntry] = []
+    # ai_comparison: original_label vs AI question, side by side.
+    #   If ai_used=false for an entry, ai_question == original_label (no AI involved).
+    ai_comparison: list[AIComparisonEntry] = []
+    # Whether Groq was called (false when no_ai=true or GROQ_API_KEY not set)
+    ai_used: bool = False
 
 
 @router.post("/process-pdf", response_model=ProcessPdfResponse)
@@ -55,6 +101,13 @@ async def process_pdf(
     file: UploadFile = File(...),
     user_language: str = Query("en"),
     document_language: str = Query("de"),
+    no_ai: bool = Query(
+        False,
+        description=(
+            "Diagnostic: bypass Groq and use raw PDF labels as questions. "
+            "Use this to isolate whether wrong questions come from extraction or AI."
+        ),
+    ),
 ):
     """
     Upload a PDF and receive grounded questions + a signed PDF token.
@@ -80,7 +133,10 @@ async def process_pdf(
     if content[:4] != b"%PDF":
         raise HTTPException(status_code=400, detail="Uploaded file is not a PDF.")
 
-    log.info("process-pdf START filename=%s size_kb=%d lang=%s", filename, size_kb, user_language)
+    log.info(
+        "process-pdf START filename=%s size_kb=%d lang=%s no_ai=%s",
+        filename, size_kb, user_language, no_ai,
+    )
 
     # ── 1. Extract deterministic field map ───────────────────────────────────
     extraction = extract_field_map(content)
@@ -99,7 +155,24 @@ async def process_pdf(
         }.get(extraction.pdf_type, "No fields could be extracted from this PDF.")
         raise HTTPException(status_code=422, detail=detail)
 
-    # ── 2. Translate labels → user language via Groq ─────────────────────────
+    # ── 2. Build raw_extracted_fields (BEFORE translation) ───────────────────
+    raw_extracted_fields = [
+        RawFieldEntry(
+            field_id=e.field_id,
+            original_label=e.original_label,
+            field_type=e.field_type,
+            source_page=e.source_page,
+            source_text=e.source_text,
+            confidence=e.confidence,
+            source=e.source,
+            bbox=e.bbox,
+            options=e.options,
+            reason=e.reason,
+        )
+        for e in extraction.fields
+    ]
+
+    # ── 3. Translate labels → user language ──────────────────────────────────
     fields_for_groq = [
         {
             "field_name":     e.field_id,
@@ -109,14 +182,24 @@ async def process_pdf(
         }
         for e in extraction.fields
     ]
-    raw_translations = translate_fields(fields_for_groq, user_language, document_language)
 
-    # ── 3. Anti-hallucination validation ─────────────────────────────────────
+    groq_key_set = bool(os.environ.get("GROQ_API_KEY", "").strip())
+
+    if no_ai:
+        # MODE 1: bypass AI — use raw PDF labels as questions
+        raw_translations = static_fallback(fields_for_groq, user_language)
+        ai_was_used = False
+        log.info("process-pdf no_ai=true — skipping Groq, using raw PDF labels")
+    else:
+        raw_translations = translate_fields(fields_for_groq, user_language, document_language)
+        ai_was_used = groq_key_set  # true if we attempted Groq (may still have fallen back)
+
+    # ── 4. Anti-hallucination validation ─────────────────────────────────────
     report = validate_no_hallucinations(extraction.fields, raw_translations)
     if not report.is_clean:
         log.warning("process-pdf HALLUCINATION invented=%s", report.invented)
 
-    # ── 4. Build FieldDefinition list with confidence gate ───────────────────
+    # ── 5. Build FieldDefinition list with confidence gate ───────────────────
     prefilled_ids = {e.field_id for e in extraction.fields if e.current_value}
     field_defs = field_map_to_defs(
         extraction.fields,
@@ -126,7 +209,7 @@ async def process_pdf(
         document_language,
     )
 
-    # ── 5. Hard assertion: every question key must be in extracted field map ──
+    # ── 6. Hard assertion: every question key must be in extracted field map ──
     extracted_set = set(extracted_ids)
     for fd in field_defs:
         if fd.key not in extracted_set:
@@ -136,7 +219,22 @@ async def process_pdf(
                 detail=f"BUG: question '{fd.key}' not in extracted PDF field map.",
             )
 
-    # ── 6. Accuracy report ────────────────────────────────────────────────────
+    # ── 7. Build AI comparison table (MODE 3) ────────────────────────────────
+    ai_comparison = []
+    for e in extraction.fields:
+        tr = report.cleaned_translations.get(e.field_id, {})
+        ai_q = tr.get("question") or e.original_label
+        ai_e = tr.get("explanation", "")
+        ai_comparison.append(AIComparisonEntry(
+            field_id=e.field_id,
+            original_label=e.original_label,
+            ai_question=ai_q,
+            ai_explanation=ai_e,
+            confidence=e.confidence,
+            ai_used=ai_was_used,
+        ))
+
+    # ── 8. Accuracy report ────────────────────────────────────────────────────
     pipeline_report = build_analysis_report(extraction, field_defs, report)
     analysis = AnalysisReport(
         pdf_type=pipeline_report.pdf_type,
@@ -154,14 +252,14 @@ async def process_pdf(
     shown = [d for d in field_defs if d.show_question]
     log.info(
         "process-pdf RESULT pdf_type=%s field_count=%d question_count=%d "
-        "blocked=%d invented_removed=%d grounding=%s first_question_ids=%s",
+        "blocked=%d invented_removed=%d grounding=%s ai_used=%s first_question_ids=%s",
         extraction.pdf_type, len(extraction.fields), len(shown),
         len([d for d in field_defs if not d.show_question]),
-        len(report.invented), analysis.grounding_rate,
+        len(report.invented), analysis.grounding_rate, ai_was_used,
         [d.key for d in shown[:10]],
     )
 
-    # ── 7. Sign PDF token (no DB write, no file write) ───────────────────────
+    # ── 9. Sign PDF token (no DB write, no file write) ───────────────────────
     pdf_token = sign_pdf_token(
         pdf_bytes=content,
         field_ids=extracted_ids,
@@ -175,4 +273,7 @@ async def process_pdf(
         pdf_token=pdf_token,
         analysis_report=analysis,
         filename=filename,
+        raw_extracted_fields=raw_extracted_fields,
+        ai_comparison=ai_comparison,
+        ai_used=ai_was_used,
     )

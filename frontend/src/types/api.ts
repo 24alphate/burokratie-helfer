@@ -127,6 +127,30 @@ export interface PDFGenerateResponse {
 
 // ── Stateless pipeline types ──────────────────────────────────────────────────
 
+/** One extracted field BEFORE AI translation — extraction ground truth (MODE 2) */
+export interface RawFieldEntry {
+  field_id: string;
+  original_label: string;
+  field_type: string;
+  source_page: number;
+  source_text: string;
+  confidence: number;
+  source: string;          // "acroform" | "pdfplumber" | "ocr"
+  bbox: number[] | null;
+  options: string[];
+  reason: string;
+}
+
+/** Side-by-side original label vs AI question for one field (MODE 3) */
+export interface AIComparisonEntry {
+  field_id: string;
+  original_label: string;  // raw PDF label
+  ai_question: string;     // AI output (== original_label when no_ai=true or fallback)
+  ai_explanation: string;
+  confidence: number;
+  ai_used: boolean;
+}
+
 /** Response from POST /api/v1/process-pdf */
 export interface ProcessPdfResponse {
   fields: FieldDefinition[];
@@ -135,6 +159,12 @@ export interface ProcessPdfResponse {
   pdf_token: string;
   analysis_report?: AnalysisReport | null;
   filename: string;
+  /** Diagnostic: field map BEFORE AI translation */
+  raw_extracted_fields: RawFieldEntry[];
+  /** Diagnostic: original_label vs AI question for every field */
+  ai_comparison: AIComparisonEntry[];
+  /** Whether Groq was attempted (false when no_ai=true or GROQ_API_KEY not set) */
+  ai_used: boolean;
 }
 
 export class ApiError extends Error {

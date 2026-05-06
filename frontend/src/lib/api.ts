@@ -239,10 +239,12 @@ export const api = {
     file: File,
     userLanguage: string,
     documentLanguage = "de",
+    noAi = false,
   ): Promise<ProcessPdfResponse> => {
     const form = new FormData();
     form.append("file", file);
     const params = new URLSearchParams({ user_language: userLanguage, document_language: documentLanguage });
+    if (noAi) params.set("no_ai", "true");
     const url = `${BASE}/process-pdf?${params}`;
 
     console.log("[processPdf] POST", url, "file:", file.name, file.size, "bytes");
