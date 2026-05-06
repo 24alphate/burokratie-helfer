@@ -31,20 +31,7 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
   const [isLoading, setIsLoading] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  useEffect(() => { setMounted(true); }, []);
-
-  useEffect(() => {
-    if (mounted && (!sessionToken || !caseId)) {
-      router.replace("/");
-    }
-  }, [mounted, sessionToken, caseId, router]);
-
-  if (!mounted || !sessionToken || !caseId) return null;
-
-  // ── Client-side question flow (primary path) ───────────────────────────────
-  // Fields are stored in Zustand (localStorage) from the upload response.
-  // This works across Vercel cold starts because localStorage persists.
-
+  // Derive state before hooks — safe even when undefined (old localStorage)
   const safeFields = fields ?? [];
   const safeAnsweredKeys = answeredKeys ?? [];
   const questionFields = safeFields.filter((f) => !f.is_prefilled);
@@ -54,19 +41,30 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
   const totalCount = questionFields.length;
   const prefillCount = safeFields.length - questionFields.length;
 
-  // Redirect to upload if no fields stored (session without upload, or stale store)
+  // ALL hooks must appear before any conditional return
+  useEffect(() => { setMounted(true); }, []);
+
+  useEffect(() => {
+    if (mounted && (!sessionToken || !caseId)) {
+      router.replace("/");
+    }
+  }, [mounted, sessionToken, caseId, router]);
+
   useEffect(() => {
     if (mounted && sessionToken && caseId && safeFields.length === 0) {
       router.replace(`/${locale}/upload`);
     }
   }, [mounted, sessionToken, caseId, safeFields.length, locale, router]);
 
-  // Navigate to review when all questions answered
   useEffect(() => {
     if (mounted && safeFields.length > 0 && unanswered.length === 0) {
       router.push(`/${locale}/review`);
     }
   }, [mounted, safeFields.length, unanswered.length, locale, router]);
+
+  // Conditional returns after all hooks
+  if (!mounted) return null;
+  if (!sessionToken || !caseId) return null;
 
   async function handleAnswer(rawAnswer: string) {
     if (!nextField || !sessionToken || !caseId) return;
@@ -80,16 +78,15 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
         setSubmitError(result.validation_errors[0]);
         return;
       }
-      addAnsweredKey(nextField.key);
-    } catch (e: unknown) {
-      // If backend rejects (e.g. template gone after cold start), still advance client-side
-      addAnsweredKey(nextField.key);
+    } catch {
+      // Backend may reject after cold start — still advance client-side
     } finally {
       setIsLoading(false);
     }
+    addAnsweredKey(nextField.key);
   }
 
-  if (!nextField && safeFields.length === 0) {
+  if (safeFields.length === 0) {
     return (
       <>
         <Header />
@@ -103,9 +100,8 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
     );
   }
 
-  if (!nextField) return null; // navigating to review
+  if (!nextField) return null; // about to navigate to review
 
-  // Convert FieldDefinition → QuestionRead shape for QuestionCard reuse
   const question: QuestionRead = {
     id: nextField.key,
     field_key: nextField.key,
@@ -137,7 +133,11 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
         )}
 
         <div className="mb-3 flex items-center gap-3 text-sm text-gray-400">
-          <span>{locale === "ar" ? `سؤال ${answeredCount + 1} من ${totalCount}` : `Question ${answeredCount + 1} of ${totalCount}`}</span>
+          <span>
+            {locale === "ar"
+              ? `سؤال ${answeredCount + 1} من ${totalCount}`
+              : `Question ${answeredCount + 1} of ${totalCount}`}
+          </span>
           <div className="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden">
             <div
               className="h-full bg-brand-600 rounded-full transition-all duration-300"
