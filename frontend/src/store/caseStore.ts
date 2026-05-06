@@ -8,16 +8,34 @@ interface CaseStore {
   locale: string;
   pdfId: string | null;
 
+  // ── Upload attempt tracking ───────────────────────────────────────────────
+  // uploadAttemptId: a new UUID is generated at the START of every upload
+  // attempt, before the fetch begins. It is cleared immediately along with all
+  // document state.
+  //
+  // fieldsForUploadAttemptId: the uploadAttemptId that produced the current
+  // fields. The questions page requires this to equal uploadAttemptId before
+  // showing any question.
+  //
+  // This prevents stale fields from a previous PDF leaking into a new upload:
+  //   - PDF A uploaded → fields set, fieldsForUploadAttemptId = "attempt-A"
+  //   - PDF B upload starts → uploadAttemptId = "attempt-B", fields cleared
+  //   - PDF B fails → fields stay empty, fieldsForUploadAttemptId = null
+  //   - questions page: "attempt-B" !== null → blocked → redirect to upload
+  uploadAttemptId: string | null;
+  fieldsForUploadAttemptId: string | null;
+
+  // File metadata stored at the START of every upload (before the fetch).
+  // The questions page can show these in the debug panel as identity proof.
+  currentFilename: string | null;
+  currentFileSize: number | null;
+  currentFileLastModified: number | null;
+
   // ── Stateless pipeline fields ─────────────────────────────────────────────
-  // pdfToken: signed JWT from /process-pdf — contains the original PDF bytes.
-  // answeredValues: field_key → raw_answer, stored here so the review page can
-  //   build the answers map for /fill-pdf without a DB lookup.
   pdfToken: string | null;
   answeredValues: Record<string, string>;
 
   // ── Grounding fields ──────────────────────────────────────────────────────
-  // RULE: never show questions unless pdfToken is set AND extractedFieldIds is
-  //   non-empty AND fieldsForCaseId === caseId (for the legacy flow).
   fields: FieldDefinition[];
   fieldsForCaseId: string | null;
   documentId: string | null;
@@ -30,12 +48,29 @@ interface CaseStore {
   setLocale: (locale: string) => void;
   setPdfId: (id: string) => void;
   setPdfToken: (token: string) => void;
+
+  /**
+   * Call this BEFORE the /process-pdf fetch starts.
+   * Clears all document state so stale fields from a previous PDF cannot leak.
+   * Stores file metadata for identity verification.
+   * Returns the new uploadAttemptId — capture it in a local variable
+   * and check it after the fetch to detect race conditions (if the user
+   * uploaded another file while this one was in flight).
+   */
+  beginNewUpload: (params: {
+    filename: string;
+    fileSize: number;
+    fileLastModified: number;
+  }) => string;
+
   setFields: (
     fields: FieldDefinition[],
     caseId: string,
     documentId: string,
     extractedFieldIds: string[],
+    uploadAttemptId: string,
   ) => void;
+
   addAnswer: (key: string, value: string) => void;
   addAnsweredKey: (key: string) => void;
   mergeTranslations: (
@@ -52,6 +87,11 @@ export const useCaseStore = create<CaseStore>()(
       caseId: null,
       locale: "en",
       pdfId: null,
+      uploadAttemptId: null,
+      fieldsForUploadAttemptId: null,
+      currentFilename: null,
+      currentFileSize: null,
+      currentFileLastModified: null,
       pdfToken: null,
       answeredValues: {},
       fields: [],
@@ -66,17 +106,38 @@ export const useCaseStore = create<CaseStore>()(
       setPdfId: (id) => set({ pdfId: id }),
       setPdfToken: (token) => set({ pdfToken: token }),
 
-      setFields: (fields, caseId, documentId, extractedFieldIds) =>
+      beginNewUpload: ({ filename, fileSize, fileLastModified }) => {
+        const id = crypto.randomUUID();
+        set({
+          // New attempt identity
+          uploadAttemptId: id,
+          fieldsForUploadAttemptId: null,
+          currentFilename: filename,
+          currentFileSize: fileSize,
+          currentFileLastModified: fileLastModified,
+          // Clear ALL previous document state — this is the core fix
+          fields: [],
+          fieldsForCaseId: null,
+          documentId: null,
+          extractedFieldIds: [],
+          pdfToken: null,
+          answeredValues: {},
+          answeredKeys: [],
+        });
+        return id;
+      },
+
+      setFields: (fields, caseId, documentId, extractedFieldIds, uploadAttemptId) =>
         set({
           fields,
           fieldsForCaseId: caseId,
           documentId,
           extractedFieldIds,
+          fieldsForUploadAttemptId: uploadAttemptId,
           answeredKeys: [],
           answeredValues: {},
         }),
 
-      // Store both the key (for progress tracking) and the value (for PDF filling).
       addAnswer: (key, value) =>
         set((s) => ({
           answeredKeys: s.answeredKeys.includes(key)
@@ -85,7 +146,6 @@ export const useCaseStore = create<CaseStore>()(
           answeredValues: { ...s.answeredValues, [key]: value },
         })),
 
-      // Legacy: used by old flow where values came from DB.
       addAnsweredKey: (key) =>
         set((s) => ({
           answeredKeys: s.answeredKeys.includes(key)
@@ -115,6 +175,11 @@ export const useCaseStore = create<CaseStore>()(
           sessionToken: null,
           caseId: null,
           pdfId: null,
+          uploadAttemptId: null,
+          fieldsForUploadAttemptId: null,
+          currentFilename: null,
+          currentFileSize: null,
+          currentFileLastModified: null,
           pdfToken: null,
           answeredValues: {},
           fields: [],
@@ -129,13 +194,21 @@ export const useCaseStore = create<CaseStore>()(
       merge: (persisted: unknown, current) => ({
         ...current,
         ...(persisted as object),
-        fields: (persisted as any)?.fields ?? [],
-        fieldsForCaseId: (persisted as any)?.fieldsForCaseId ?? null,
-        documentId: (persisted as any)?.documentId ?? null,
-        extractedFieldIds: (persisted as any)?.extractedFieldIds ?? [],
-        answeredKeys: (persisted as any)?.answeredKeys ?? [],
-        pdfToken: (persisted as any)?.pdfToken ?? null,
-        answeredValues: (persisted as any)?.answeredValues ?? {},
+        fields:                    (persisted as any)?.fields ?? [],
+        fieldsForCaseId:           (persisted as any)?.fieldsForCaseId ?? null,
+        documentId:                (persisted as any)?.documentId ?? null,
+        extractedFieldIds:         (persisted as any)?.extractedFieldIds ?? [],
+        answeredKeys:              (persisted as any)?.answeredKeys ?? [],
+        pdfToken:                  (persisted as any)?.pdfToken ?? null,
+        answeredValues:            (persisted as any)?.answeredValues ?? {},
+        // Both IDs are persisted so a page refresh doesn't force a re-upload.
+        // After a successful upload: both = "attempt-A" → questions page shows ✓
+        // After a failed upload: uploadAttemptId = "attempt-B", fieldsFor... = null → blocked ✓
+        uploadAttemptId:           (persisted as any)?.uploadAttemptId ?? null,
+        fieldsForUploadAttemptId:  (persisted as any)?.fieldsForUploadAttemptId ?? null,
+        currentFilename:           (persisted as any)?.currentFilename ?? null,
+        currentFileSize:           (persisted as any)?.currentFileSize ?? null,
+        currentFileLastModified:   (persisted as any)?.currentFileLastModified ?? null,
       }),
     }
   )

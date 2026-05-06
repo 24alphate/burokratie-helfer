@@ -128,8 +128,10 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
   const router = useRouter();
   const {
     sessionToken, caseId,
-    fields, fieldsForCaseId,
+    fields,
     documentId, extractedFieldIds,
+    pdfToken,
+    uploadAttemptId, fieldsForUploadAttemptId,
     answeredKeys, addAnswer,
   } = useCaseStore();
   const [mounted, setMounted] = useState(false);
@@ -143,17 +145,49 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
     if (mounted && (!sessionToken || !caseId)) router.replace("/");
   }, [mounted, sessionToken, caseId, router]);
 
-  // Ownership + grounding gate:
-  // - If fields belong to a different case → stale → redirect to upload
-  // - If fields array is empty → nothing to show → redirect to upload
-  // The extractedFieldIds === 0 case is handled below (show error, not redirect)
+  // ── OWNERSHIP GUARD ───────────────────────────────────────────────────────
+  // Conditions that must ALL hold before any question is shown:
+  //
+  //   1. fields exist (non-empty)
+  //   2. extractedFieldIds exist (non-empty) — confirmed grounding list
+  //   3. pdfToken exists — confirms a successful /process-pdf call returned
+  //   4. fieldsForUploadAttemptId matches uploadAttemptId — confirms the stored
+  //      fields were produced by the MOST RECENT upload attempt, not a previous
+  //      one that failed or was superseded
+  //
+  // If any condition fails, all document state is stale → redirect to upload.
+  // This is the fix for the core bug: PDF A's fields cannot survive into a
+  // failed PDF B upload attempt.
   useEffect(() => {
     if (!mounted || !sessionToken || !caseId) return;
-    const stale = fieldsForCaseId !== caseId;
-    if (stale || (fields ?? []).length === 0) {
+
+    const hasFields    = (fields ?? []).length > 0;
+    const hasExtracted = (extractedFieldIds ?? []).length > 0;
+    const hasToken     = pdfToken !== null;
+    const attemptMatch = fieldsForUploadAttemptId !== null
+                         && uploadAttemptId !== null
+                         && fieldsForUploadAttemptId === uploadAttemptId;
+
+    if (!hasFields || !hasExtracted || !hasToken || !attemptMatch) {
+      if (hasFields && (!hasToken || !attemptMatch)) {
+        // Fields exist but the upload attempt is stale or missing — this is the bug scenario.
+        console.warn(
+          "[OWNERSHIP GUARD] Stale document state detected. Redirecting to upload.",
+          {
+            hasFields, hasExtracted, hasToken,
+            uploadAttemptId, fieldsForUploadAttemptId,
+            attemptMatch,
+          }
+        );
+      }
       router.replace(`/${locale}/upload`);
     }
-  }, [mounted, sessionToken, caseId, fieldsForCaseId, fields, locale, router]);
+  }, [
+    mounted, sessionToken, caseId,
+    fields, extractedFieldIds, pdfToken,
+    uploadAttemptId, fieldsForUploadAttemptId,
+    locale, router,
+  ]);
 
   // Derive question state
   const safeFields      = fields ?? [];
