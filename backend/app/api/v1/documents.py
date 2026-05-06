@@ -1,11 +1,15 @@
 """
-Upload route — three paths:
-  A. Fillable PDF with AcroForm widgets   → deterministic field extraction (no hallucination)
-  B. Scanned / flat PDF                  → Groq vision field detection
-  C. Fallback                            → fixed ALG II template
+Upload route — optimised for Vercel's 10-second timeout.
 
-Every FieldDefinition produced by Path A is grounded in an actual PDF widget.
-Path B fields carry confidence < 1.0 and may be marked needs_review.
+Three paths:
+  A. Fillable PDF with AcroForm widgets → pypdf field extraction (< 1s, no LLM)
+  B. Scanned / flat PDF               → Groq vision field detection (2-5s)
+  C. Fallback                         → fixed ALG II template (fast)
+
+Language translation is NOT done during upload. Questions are returned with
+static English/DE/AR/TR text via the _Q lookup table. A separate
+POST /cases/{id}/translate-fields endpoint handles Groq translation lazily
+(called fire-and-forget by the frontend after upload succeeds).
 """
 from __future__ import annotations
 
@@ -18,7 +22,7 @@ from pathlib import Path
 from typing import Optional
 
 import pypdf
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, Request, UploadFile
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, get_current_user
@@ -33,23 +37,21 @@ from app.models.user import User
 from app.schemas.document import FieldDefinition, FieldOption, UploadResponse
 from app.services.audit_service import audit_service
 from app.services.dynamic_form_service import create_dynamic_template, make_question_for_field
-from app.services.question_translator import translate_fields
+from app.services.question_translator import static_fallback, translate_fields
 from app.services.validation_service import validation_service
 
 router = APIRouter(prefix="/cases", tags=["documents"])
 
 MAX_SIZE_BYTES = settings.max_upload_size_mb * 1024 * 1024
 
-# pypdf AcroForm field-type flags
 _FF_RADIO       = 1 << 15
 _FF_PUSHBUTTON  = 1 << 16
 _FF_MULTISELECT = 1 << 21
 
 
-# ── AcroForm full extraction ───────────────────────────────────────────────────
+# ── AcroForm extraction (deterministic, no LLM) ───────────────────────────────
 
 def _acroform_field_type(ft: str, flags: int) -> Optional[str]:
-    """Map PDF field type code + flags → our type string. Returns None to skip."""
     if ft == "/Tx":
         return "text"
     if ft == "/Sig":
@@ -58,25 +60,20 @@ def _acroform_field_type(ft: str, flags: int) -> Optional[str]:
         return "multiselect" if (flags & _FF_MULTISELECT) else "select"
     if ft == "/Btn":
         if flags & _FF_PUSHBUTTON:
-            return None        # skip submit/reset buttons
+            return None
         return "radio" if (flags & _FF_RADIO) else "checkbox"
     return "text"
 
 
 def _collect_radio_options(reader: pypdf.PdfReader) -> dict[str, list[str]]:
-    """
-    Walk every page annotation to collect radio-button option values.
-    For a radio group "Familienstand" with choices ["ledig","verheiratet",...],
-    each child widget has /AP/N/{option_key}. We harvest those keys.
-    """
     opts: dict[str, list[str]] = {}
     for page in reader.pages:
         for ref in page.get("/Annots", []):
             try:
                 ann = ref.get_object() if hasattr(ref, "get_object") else ref
                 parent_ref = ann.get("/Parent")
-                parent = (parent_ref.get_object() if hasattr(parent_ref, "get_object")
-                          else parent_ref) if parent_ref else None
+                parent = (parent_ref.get_object()
+                          if hasattr(parent_ref, "get_object") else parent_ref) if parent_ref else None
                 fname = str((parent or ann).get("/T", "")).strip().lstrip("/")
                 if not fname:
                     continue
@@ -98,30 +95,21 @@ def _collect_radio_options(reader: pypdf.PdfReader) -> dict[str, list[str]]:
 
 
 def _extract_acroform_full(pdf_bytes: bytes) -> list[dict]:
-    """
-    Extract every AcroForm field with type, current value, and options.
-    Returns list of dicts — order matches the field tree (≈ visual order).
-    This is the ground-truth source: every returned field IS in the PDF.
-    """
+    """Ground-truth AcroForm extraction. Every returned field IS in the PDF."""
     try:
         reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
         raw = reader.get_fields()
         if not raw:
             return []
-
         radio_opts = _collect_radio_options(reader)
         results: list[dict] = []
-
         for name, field in raw.items():
             clean = name.lstrip("/").strip()
             ft    = str(field.get("/FT", "/Tx"))
             flags = int(str(field.get("/Ff", "0")).strip() or "0")
-
             ftype = _acroform_field_type(ft, flags)
             if ftype is None:
-                continue   # skip push-buttons
-
-            # Current value
+                continue
             val = field.get("/V") or field.get("/DV") or ""
             if hasattr(val, "raw_value"):
                 val = val.raw_value
@@ -130,32 +118,24 @@ def _extract_acroform_full(pdf_bytes: bytes) -> list[dict]:
                 val = ""
             elif val.startswith("/"):
                 val = val[1:]
-
-            # Options (select / radio / checkbox)
             options: list[str] = []
             if ftype in ("select", "multiselect"):
                 raw_opts = field.get("/Opt", [])
                 for o in (raw_opts if isinstance(raw_opts, list) else []):
                     options.append(str(o[0]) if isinstance(o, (list, tuple)) else str(o))
-            elif ftype == "radio":
+            elif ftype in ("radio", "checkbox"):
                 options = radio_opts.get(clean, [])
-            elif ftype == "checkbox":
-                options = radio_opts.get(clean, ["yes"])
-
             results.append({
-                "field_name":     clean,
-                "field_type":     ftype,
-                "current_value":  val,
-                "options":        options,
-                "original_label": clean,   # for AcroForm, widget name IS the label
+                "field_name": clean, "field_type": ftype,
+                "current_value": val, "options": options,
+                "original_label": clean,
             })
-
         return results
     except Exception:
         return []
 
 
-# ── FieldDefinition builder ────────────────────────────────────────────────────
+# ── FieldDefinition builder ───────────────────────────────────────────────────
 
 def _build_field_defs(
     extracted: list[dict],
@@ -167,28 +147,21 @@ def _build_field_defs(
 ) -> list[FieldDefinition]:
     defs: list[FieldDefinition] = []
     for i, f in enumerate(extracted, 1):
-        fname   = f["field_name"]
-        ftype   = f["field_type"]
-        raw_lbl = f.get("original_label", fname)
-        f_opts  = f.get("options", [])
-
-        tr = translations.get(fname, {})
-        question_text = tr.get("question") or _fallback_question(fname, user_language)
+        fname  = f["field_name"]
+        ftype  = f["field_type"]
+        f_opts = f.get("options", [])
+        tr     = translations.get(fname, {})
+        tr_opts = tr.get("translated_options", {})
+        question_text = tr.get("question") or fname
         explanation   = tr.get("explanation", "")
-        tr_opts       = tr.get("translated_options", {})  # {orig_val: translated_label}
-
-        options: list[FieldOption] = []
-        for orig_val in f_opts:
-            translated_label = tr_opts.get(orig_val, orig_val)
-            options.append(FieldOption(value=orig_val, label=translated_label))
-
+        options = [FieldOption(value=v, label=tr_opts.get(v, v)) for v in f_opts]
         defs.append(FieldDefinition(
             key=fname,
             question={user_language: question_text},
             explanation={user_language: explanation},
             input_type=ftype,
             options=options,
-            original_label=raw_lbl,
+            original_label=f.get("original_label", fname),
             document_language=document_language,
             source_page=1,
             order=i,
@@ -199,20 +172,15 @@ def _build_field_defs(
     return defs
 
 
-def _fallback_question(field_name: str, lang: str) -> str:
-    q = make_question_for_field(field_name)
-    return q["question_text"].get(lang, q["question_text"].get("en", field_name))
-
-
-# ── Upload route ───────────────────────────────────────────────────────────────
+# ── Upload route (no LLM calls — must complete < 10s on Vercel) ───────────────
 
 @router.post("/{case_id}/upload", response_model=UploadResponse)
 async def upload_document(
     case_id: str,
     request: Request,
     file: UploadFile = File(...),
-    user_language: str = Query("en", description="User's preferred guide language (ISO 639-1)"),
-    document_language: str = Query("de", description="Detected document language"),
+    user_language: str = Query("en"),
+    document_language: str = Query("de"),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -234,18 +202,16 @@ async def upload_document(
 
     is_pdf    = content[:4] == b"%PDF"
     form_name = Path(file.filename or "Uploaded Form").stem.replace("_", " ").title()
-    ocr_svc   = request.app.state.ocr_service
     trans_svc = request.app.state.translation_service
 
-    # ── Path A: AcroForm — ground-truth extraction, zero hallucination ─────────
+    # ── Path A: AcroForm — ground-truth, no LLM, < 1s ────────────────────────
     extracted_fields: list[dict] = []
     if is_pdf:
         extracted_fields = _extract_acroform_full(content)
 
     if extracted_fields:
-        # Translate all field labels + options into user's language (one Groq call)
-        translations = translate_fields(extracted_fields, user_language, document_language)
-
+        # Use static lookup only — no Groq call during upload
+        translations = static_fallback(extracted_fields, user_language)
         prefilled_raw = {f["field_name"]: f["current_value"]
                          for f in extracted_fields if f["current_value"]}
 
@@ -254,7 +220,6 @@ async def upload_document(
             acroform_fields={f["field_name"]: f["current_value"] for f in extracted_fields},
             form_name=form_name,
         )
-
         case.form_template_id = template_id
         case.status           = CaseStatus.FORM_SELECTED.value
         case.updated_at       = datetime.now(timezone.utc)
@@ -271,14 +236,9 @@ async def upload_document(
         prefilled_count = await _save_answers(
             db, case_id, template_id, prefilled_raw, trans_svc
         )
-
         field_defs = _build_field_defs(
-            extracted=extracted_fields,
-            translations=translations,
-            prefilled_keys=set(prefilled_raw.keys()),
-            user_language=user_language,
-            document_language=document_language,
-            confidence=1.0,
+            extracted_fields, translations,
+            set(prefilled_raw.keys()), user_language, document_language, 1.0,
         )
 
         audit_service.log(db, case_id, AuditAction.DOCUMENT_UPLOADED, {
@@ -292,25 +252,25 @@ async def upload_document(
         return UploadResponse(
             document_id=doc.id, detected_form_type=template_id,
             confidence=1.0, requires_manual_selection=False,
-            prefilled_fields=prefilled_count,
-            fields=field_defs,
-            document_language=document_language,
-            user_language=user_language,
+            prefilled_fields=prefilled_count, fields=field_defs,
+            document_language=document_language, user_language=user_language,
         )
 
-    # ── Path B: scanned/flat — vision field detection ─────────────────────────
+    # ── Path B: scanned/flat — vision field detection (may use Groq) ─────────
+    ocr_svc = request.app.state.ocr_service
     vision_fields: list[dict] = await ocr_svc.detect_all_fields(content)
 
     if vision_fields:
-        translations = translate_fields(vision_fields, user_language, document_language)
-        prefilled_raw = {f["label"]: f["value"]
-                         for f in vision_fields if f.get("value")}
+        translations = static_fallback(
+            [{"field_name": f["label"], "field_type": f.get("field_type","text")}
+             for f in vision_fields],
+            user_language,
+        )
+        prefilled_raw = {f["label"]: f["value"] for f in vision_fields if f.get("value")}
         acroform_style = {f["label"]: (f.get("value") or "") for f in vision_fields}
 
         template_id, _ = create_dynamic_template(
-            db=db, case_id=case_id,
-            acroform_fields=acroform_style,
-            form_name=form_name,
+            db=db, case_id=case_id, acroform_fields=acroform_style, form_name=form_name,
         )
         case.form_template_id = template_id
         case.status           = CaseStatus.FORM_SELECTED.value
@@ -325,43 +285,30 @@ async def upload_document(
         db.add(doc)
         db.flush()
 
-        prefilled_count = await _save_answers(
-            db, case_id, template_id, prefilled_raw, trans_svc
-        )
-
-        # Convert vision dicts to the same format as AcroForm extraction
+        prefilled_count = await _save_answers(db, case_id, template_id, prefilled_raw, trans_svc)
         extracted_for_defs = [{
-            "field_name":     f["label"],
-            "field_type":     _map_vision_type(f.get("field_type", "text")),
-            "options":        f.get("options", []),
+            "field_name": f["label"],
+            "field_type": _map_vision_type(f.get("field_type", "text")),
+            "options":    f.get("options", []),
             "original_label": f["label"],
             "current_value":  f.get("value", ""),
         } for f in vision_fields]
-
         field_defs = _build_field_defs(
-            extracted=extracted_for_defs,
-            translations=translations,
-            prefilled_keys=set(prefilled_raw.keys()),
-            user_language=user_language,
-            document_language=document_language,
-            confidence=0.75,
+            extracted_for_defs, translations,
+            set(prefilled_raw.keys()), user_language, document_language, 0.75,
         )
 
         audit_service.log(db, case_id, AuditAction.DOCUMENT_UPLOADED, {
             "document_id": doc.id, "mode": "vision_dynamic",
-            "total_fields": len(vision_fields),
-            "prefilled_fields": prefilled_count,
-            "user_language": user_language,
+            "total_fields": len(vision_fields), "prefilled_fields": prefilled_count,
         })
         db.commit()
 
         return UploadResponse(
             document_id=doc.id, detected_form_type=template_id,
             confidence=0.8, requires_manual_selection=False,
-            prefilled_fields=prefilled_count,
-            fields=field_defs,
-            document_language=document_language,
-            user_language=user_language,
+            prefilled_fields=prefilled_count, fields=field_defs,
+            document_language=document_language, user_language=user_language,
         )
 
     # ── Path C: fixed ALG II template fallback ────────────────────────────────
@@ -396,19 +343,13 @@ async def upload_document(
     field_defs: list[FieldDefinition] = []
 
     if detected_type:
-        prefilled_count = await _save_answers(
-            db, case_id, detected_type, extracted_kv, trans_svc
-        )
+        prefilled_count = await _save_answers(db, case_id, detected_type, extracted_kv, trans_svc)
         questions = db.query(Question).filter(
             Question.template_id == detected_type
         ).order_by(Question.order_index).all()
-
-        # Build raw field list for one-shot translation
-        raw_for_tr = [{"field_name": q.field_key, "field_type": q.input_type,
-                        "options": [], "original_label": q.field_key}
-                       for q in questions]
-        translations = translate_fields(raw_for_tr, user_language, document_language)
-
+        raw_for_tr = [{"field_name": q.field_key, "field_type": q.input_type}
+                      for q in questions]
+        translations = static_fallback(raw_for_tr, user_language)
         for q in questions:
             qt = json.loads(q.question_text)
             tr = translations.get(q.field_key, {})
@@ -425,6 +366,7 @@ async def upload_document(
                 order=q.order_index,
                 is_prefilled=(q.field_key in extracted_kv and bool(extracted_kv[q.field_key])),
                 confidence=0.5,
+                needs_review=False,
             ))
 
     audit_service.log(db, case_id, AuditAction.DOCUMENT_UPLOADED, {
@@ -432,7 +374,6 @@ async def upload_document(
         "detected_form_type": detected_type,
         "confidence": round(ocr_result.confidence, 3),
         "prefilled_fields": prefilled_count,
-        "user_language": user_language,
     })
     db.commit()
 
@@ -440,29 +381,55 @@ async def upload_document(
         document_id=doc.id, detected_form_type=detected_type,
         confidence=ocr_result.confidence,
         requires_manual_selection=not detected_type,
-        prefilled_fields=prefilled_count,
-        fields=field_defs,
-        document_language=document_language,
-        user_language=user_language,
+        prefilled_fields=prefilled_count, fields=field_defs,
+        document_language=document_language, user_language=user_language,
     )
 
 
+# ── Lazy translation endpoint (called fire-and-forget by frontend) ────────────
+
+class TranslateRequest(Body):
+    pass
+
+
+@router.post("/{case_id}/translate-fields")
+async def translate_fields_endpoint(
+    case_id: str,
+    payload: dict = Body(...),
+    user_language: str = Query("en"),
+    document_language: str = Query("de"),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Translates field labels and option values into user_language via Groq.
+    Called fire-and-forget by the frontend after upload — not on the critical path.
+    The upload route already returns with static (instant) question text.
+    """
+    case = db.query(Case).filter(Case.id == case_id, Case.user_id == user.id).first()
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found.")
+
+    fields_input: list[dict] = payload.get("fields", [])
+    if not fields_input:
+        return {}
+
+    result = translate_fields(fields_input, user_language, document_language)
+    return result
+
+
 def _map_vision_type(vtype: str) -> str:
-    """Map vision-detected type string to our canonical types."""
     m = {"checkbox": "checkbox", "radio": "radio", "select": "select",
          "date": "date", "text": "text", "signature": "signature", "number": "number"}
     return m.get(vtype.lower(), "text")
 
 
-async def _save_answers(
-    db: Session, case_id: str, template_id: str,
-    extracted: dict[str, str], translation_service,
-) -> int:
+async def _save_answers(db, case_id, template_id, extracted, translation_service) -> int:
     if not extracted:
         return 0
-    fields    = db.query(FormField).filter(FormField.template_id == template_id).all()
+    fields = db.query(FormField).filter(FormField.template_id == template_id).all()
     valid_keys = {f.field_key: f for f in fields}
-    count     = 0
+    count = 0
     for field_key, raw_value in extracted.items():
         if not raw_value or field_key not in valid_keys:
             continue

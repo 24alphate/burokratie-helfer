@@ -69,6 +69,19 @@ export const api = {
   },
 
   documents: {
+    translateFields: async (
+      token: string,
+      caseId: string,
+      userLanguage: string,
+      fields: Array<{ field_name: string; field_type: string; options?: string[] }>,
+      documentLanguage = "de",
+    ): Promise<Record<string, { question: string; explanation: string; translated_options: Record<string, string> }>> =>
+      request(`/cases/${caseId}/translate-fields?user_language=${userLanguage}&document_language=${documentLanguage}`, {
+        method: "POST",
+        token,
+        body: JSON.stringify({ fields }),
+      }),
+
     upload: async (token: string, caseId: string, file: File, userLanguage = "en", documentLanguage = "de"): Promise<UploadResponse> => {
       const form = new FormData();
       form.append("file", file);

@@ -16,6 +16,7 @@ interface CaseStore {
   setPdfId: (id: string) => void;
   setFields: (fields: FieldDefinition[]) => void;
   addAnsweredKey: (key: string) => void;
+  mergeTranslations: (translations: Record<string, { question: string; explanation: string; translated_options: Record<string, string> }>, userLanguage: string) => void;
   reset: () => void;
 }
 
@@ -34,6 +35,22 @@ export const useCaseStore = create<CaseStore>()(
       setPdfId: (id) => set({ pdfId: id }),
       setFields: (fields) => set({ fields, answeredKeys: [] }),
       addAnsweredKey: (key) => set((s) => ({ answeredKeys: [...s.answeredKeys, key] })),
+      mergeTranslations: (translations, userLanguage) =>
+        set((s) => ({
+          fields: (s.fields ?? []).map((f) => {
+            const tr = translations[f.key];
+            if (!tr) return f;
+            return {
+              ...f,
+              question: { ...f.question, [userLanguage]: tr.question },
+              explanation: { ...f.explanation, [userLanguage]: tr.explanation },
+              options: f.options.map((o) => ({
+                ...o,
+                label: tr.translated_options?.[o.value] ?? o.label,
+              })),
+            };
+          }),
+        })),
       reset: () => set({ sessionToken: null, caseId: null, pdfId: null, fields: [], answeredKeys: [] }),
     }),
     {

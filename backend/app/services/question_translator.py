@@ -106,16 +106,24 @@ Rules:
         return _static_fallback(fields, user_language)
 
 
-def _static_fallback(fields: list[dict], user_language: str) -> dict[str, dict]:
-    """Use the static _Q lookup table as fallback for supported languages."""
+def static_fallback(fields: list[dict], user_language: str) -> dict[str, dict]:
+    """
+    Instant question text from the static _Q lookup table.
+    Supports EN/DE/AR/TR natively; other languages fall back to English.
+    No network calls — always completes in < 1ms.
+    """
     from app.services.dynamic_form_service import make_question_for_field
     result = {}
+    lang = user_language if user_language in ("en", "de", "ar", "tr") else "en"
     for f in fields:
         q = make_question_for_field(f["field_name"])
-        lang = user_language if user_language in ("en", "de", "ar", "tr") else "en"
         result[f["field_name"]] = {
             "question": q["question_text"].get(lang, q["question_text"].get("en", f["field_name"])),
             "explanation": q["explanation_text"].get(lang, ""),
             "translated_options": {},
         }
     return result
+
+
+# Keep private alias for backward compat
+_static_fallback = static_fallback
