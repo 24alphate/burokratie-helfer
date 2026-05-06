@@ -99,8 +99,8 @@ export function QuestionCard({
         />
       )}
 
-      {/* Yes/No when no explicit options (legacy) */}
-      {!hasOptions && itype === "yes_no" && (
+      {/* Yes/No and single checkbox (no PDF options = checked or not) */}
+      {!hasOptions && (itype === "yes_no" || itype === "checkbox") && (
         <YesNoInput locale={locale} onSubmit={onSubmit} isLoading={isLoading} />
       )}
 

@@ -70,7 +70,10 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
     setGenerating(true);
     setError(null);
     try {
-      const blob = await api.fillPdf(pdfToken, safeAnswers);
+      // Build field_id → original_label map for the overlay PDF summary.
+      const fieldLabels: Record<string, string> = {};
+      safeFields.forEach((f) => { fieldLabels[f.key] = f.original_label || f.key; });
+      const blob = await api.fillPdf(pdfToken, safeAnswers, fieldLabels);
       // Trigger browser download
       const url      = URL.createObjectURL(blob);
       const link     = document.createElement("a");

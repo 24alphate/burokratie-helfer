@@ -5,8 +5,9 @@ from dataclasses import dataclass, field
 @dataclass
 class PDFGenerationRequest:
     template_id: str
-    field_values: dict[str, str]  # pdf_field_name → translated German value
+    field_values: dict[str, str]       # field_id → user answer
     blank_pdf_path: str
+    field_labels: dict[str, str] = field(default_factory=dict)  # field_id → human label
 
 
 @dataclass

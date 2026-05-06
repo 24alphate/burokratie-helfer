@@ -273,6 +273,7 @@ export const api = {
   fillPdf: async (
     pdfToken: string,
     answers: Record<string, string>,
+    fieldLabels: Record<string, string> = {},
   ): Promise<Blob> => {
     const url = `${BASE}/fill-pdf`;
     console.log("[fillPdf] POST", url, "answer_count:", Object.keys(answers).length);
@@ -282,7 +283,7 @@ export const api = {
       res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pdf_token: pdfToken, answers }),
+        body: JSON.stringify({ pdf_token: pdfToken, answers, field_labels: fieldLabels }),
       });
     } catch (err) {
       console.error("[fillPdf] Network error:", err);

@@ -44,7 +44,8 @@ _generator = PyPDFGenerator()
 
 class FillPdfRequest(BaseModel):
     pdf_token: str
-    answers: dict[str, str]  # field_id → raw_answer (already in PDF language)
+    answers: dict[str, str]                    # field_id → raw_answer
+    field_labels: dict[str, str] = {}          # field_id → human label (for overlay PDF)
 
 
 @router.post("/fill-pdf")
@@ -113,6 +114,7 @@ async def fill_pdf(body: FillPdfRequest):
             template_id="stateless",
             field_values=body.answers,
             blank_pdf_path=tmp_path,
+            field_labels=body.field_labels,
         )
         result = await _generator.generate(gen_request)
 
