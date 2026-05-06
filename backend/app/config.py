@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     cors_origins_raw: str = "http://localhost:3000"
     max_upload_size_mb: int = 10
     port: int = 8000
+    # Signing key for stateless PDF tokens — set SECRET_KEY env var in production.
+    # A random default is generated per-process so tokens expire on cold start,
+    # which is the right behavior: user must re-upload after a cold start anyway.
+    secret_key: str = os.urandom(32).hex()
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

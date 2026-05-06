@@ -7,27 +7,36 @@ interface CaseStore {
   caseId: string | null;
   locale: string;
   pdfId: string | null;
-  // Fields from the extracted PDF.
-  // RULE: never read `fields` without first checking that
-  //   (a) fieldsForCaseId === caseId, AND
-  //   (b) extractedFieldIds.length > 0
-  // If either check fails, the fields are stale / ungrounded.
+
+  // ── Stateless pipeline fields ─────────────────────────────────────────────
+  // pdfToken: signed JWT from /process-pdf — contains the original PDF bytes.
+  // answeredValues: field_key → raw_answer, stored here so the review page can
+  //   build the answers map for /fill-pdf without a DB lookup.
+  pdfToken: string | null;
+  answeredValues: Record<string, string>;
+
+  // ── Grounding fields ──────────────────────────────────────────────────────
+  // RULE: never show questions unless pdfToken is set AND extractedFieldIds is
+  //   non-empty AND fieldsForCaseId === caseId (for the legacy flow).
   fields: FieldDefinition[];
-  fieldsForCaseId: string | null;  // which caseId produced the current fields
-  documentId: string | null;       // document_id from the extract-pdf-fields response
-  extractedFieldIds: string[];     // authoritative field_id list from the backend PDF extraction
-                                   // stored SEPARATELY from `fields` so the guard is meaningful
+  fieldsForCaseId: string | null;
+  documentId: string | null;
+  extractedFieldIds: string[];
   answeredKeys: string[];
+
+  // ── Actions ───────────────────────────────────────────────────────────────
   setSessionToken: (token: string) => void;
   setCaseId: (id: string) => void;
   setLocale: (locale: string) => void;
   setPdfId: (id: string) => void;
+  setPdfToken: (token: string) => void;
   setFields: (
     fields: FieldDefinition[],
     caseId: string,
     documentId: string,
     extractedFieldIds: string[],
   ) => void;
+  addAnswer: (key: string, value: string) => void;
   addAnsweredKey: (key: string) => void;
   mergeTranslations: (
     translations: Record<string, { question: string; explanation: string; translated_options: Record<string, string> }>,
@@ -43,18 +52,47 @@ export const useCaseStore = create<CaseStore>()(
       caseId: null,
       locale: "en",
       pdfId: null,
+      pdfToken: null,
+      answeredValues: {},
       fields: [],
       fieldsForCaseId: null,
       documentId: null,
       extractedFieldIds: [],
       answeredKeys: [],
+
       setSessionToken: (token) => set({ sessionToken: token }),
       setCaseId: (id) => set({ caseId: id }),
       setLocale: (locale) => set({ locale }),
       setPdfId: (id) => set({ pdfId: id }),
+      setPdfToken: (token) => set({ pdfToken: token }),
+
       setFields: (fields, caseId, documentId, extractedFieldIds) =>
-        set({ fields, fieldsForCaseId: caseId, documentId, extractedFieldIds, answeredKeys: [] }),
-      addAnsweredKey: (key) => set((s) => ({ answeredKeys: [...s.answeredKeys, key] })),
+        set({
+          fields,
+          fieldsForCaseId: caseId,
+          documentId,
+          extractedFieldIds,
+          answeredKeys: [],
+          answeredValues: {},
+        }),
+
+      // Store both the key (for progress tracking) and the value (for PDF filling).
+      addAnswer: (key, value) =>
+        set((s) => ({
+          answeredKeys: s.answeredKeys.includes(key)
+            ? s.answeredKeys
+            : [...s.answeredKeys, key],
+          answeredValues: { ...s.answeredValues, [key]: value },
+        })),
+
+      // Legacy: used by old flow where values came from DB.
+      addAnsweredKey: (key) =>
+        set((s) => ({
+          answeredKeys: s.answeredKeys.includes(key)
+            ? s.answeredKeys
+            : [...s.answeredKeys, key],
+        })),
+
       mergeTranslations: (translations, userLanguage) =>
         set((s) => ({
           fields: (s.fields ?? []).map((f) => {
@@ -71,16 +109,20 @@ export const useCaseStore = create<CaseStore>()(
             };
           }),
         })),
-      reset: () => set({
-        sessionToken: null,
-        caseId: null,
-        pdfId: null,
-        fields: [],
-        fieldsForCaseId: null,
-        documentId: null,
-        extractedFieldIds: [],
-        answeredKeys: [],
-      }),
+
+      reset: () =>
+        set({
+          sessionToken: null,
+          caseId: null,
+          pdfId: null,
+          pdfToken: null,
+          answeredValues: {},
+          fields: [],
+          fieldsForCaseId: null,
+          documentId: null,
+          extractedFieldIds: [],
+          answeredKeys: [],
+        }),
     }),
     {
       name: "bh-store",
@@ -90,10 +132,10 @@ export const useCaseStore = create<CaseStore>()(
         fields: (persisted as any)?.fields ?? [],
         fieldsForCaseId: (persisted as any)?.fieldsForCaseId ?? null,
         documentId: (persisted as any)?.documentId ?? null,
-        // If extractedFieldIds is missing from old localStorage (pre-this fix),
-        // default to [] so the grounding gate blocks everything until re-upload.
         extractedFieldIds: (persisted as any)?.extractedFieldIds ?? [],
         answeredKeys: (persisted as any)?.answeredKeys ?? [],
+        pdfToken: (persisted as any)?.pdfToken ?? null,
+        answeredValues: (persisted as any)?.answeredValues ?? {},
       }),
     }
   )

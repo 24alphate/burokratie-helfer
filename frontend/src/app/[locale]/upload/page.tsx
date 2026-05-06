@@ -1,39 +1,38 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Header } from "@/components/layout/Header";
 import { StepProgress } from "@/components/layout/StepProgress";
 import { FileDropzone } from "@/components/upload/FileDropzone";
 import { useCaseStore } from "@/store/caseStore";
 import { api, API_BASE, isProductionWithoutApiUrl } from "@/lib/api";
-import { AnalysisReport, UploadResponse } from "@/types/api";
+import { AnalysisReport } from "@/types/api";
 
 const T: Record<string, Record<string, string>> = {
-  upload_title:    { en: "Upload your PDF form", ar: "ارفع نموذج PDF", tr: "PDF formunuzu yükleyin", de: "PDF-Formular hochladen" },
-  upload_instr:    { en: "Drop any fillable PDF — fields are read directly from your document.", ar: "أسقط أي نموذج PDF — تُقرأ الحقول مباشرة من مستندك.", tr: "Doldurulabilir PDF'yi bırakın — alanlar doğrudan belgenizden okunur.", de: "Beliebiges PDF ablegen — Felder werden direkt gelesen." },
-  supported:       { en: "Any fillable PDF (government forms, contracts, applications…)", ar: "أي نموذج PDF قابل للتعبئة", tr: "Her doldurulabilir PDF", de: "Jedes ausfüllbare PDF" },
-  analysing:       { en: "Reading your PDF…", ar: "جارٍ قراءة ملف PDF…", tr: "PDF okunuyor…", de: "PDF wird gelesen…" },
-  analysing_sub:   { en: "Extracting fields and translating questions. This takes a few seconds.", ar: "استخراج الحقول وترجمة الأسئلة. هذا يستغرق بضع ثوانٍ.", tr: "Alanlar ayıklanıyor ve sorular çevriliyor. Bu birkaç saniye sürer.", de: "Felder werden extrahiert und Fragen übersetzt. Das dauert einige Sekunden." },
-  no_fields:       { en: "No fillable fields found in this PDF.", ar: "لم يتم العثور على حقول قابلة للتعبئة في هذا PDF.", tr: "Bu PDF'de doldurulabilir alan bulunamadı.", de: "Keine ausfüllbaren Felder in dieser PDF gefunden." },
-  blocked_warn:    { en: "fields could not be verified (low confidence) and were excluded.", ar: "حقول لم يمكن التحقق منها واستُبعدت.", tr: "alan doğrulanamadı ve dışlandı.", de: "Felder konnten nicht verifiziert werden und wurden ausgeschlossen." },
+  title:       { en: "Upload your PDF form", ar: "ارفع نموذج PDF", tr: "PDF formunuzu yükleyin", de: "PDF-Formular hochladen" },
+  instr:       { en: "Drop any fillable PDF — fields are read directly from your document.", ar: "أسقط أي نموذج PDF — تُقرأ الحقول مباشرة من مستندك.", tr: "Doldurulabilir PDF'yi bırakın — alanlar doğrudan belgenizden okunur.", de: "Beliebiges PDF ablegen — Felder werden direkt gelesen." },
+  supported:   { en: "Any fillable PDF (government forms, contracts, applications…)", ar: "أي نموذج PDF قابل للتعبئة", tr: "Her doldurulabilir PDF", de: "Jedes ausfüllbare PDF" },
+  processing:  { en: "Reading your PDF…", ar: "جارٍ قراءة ملف PDF…", tr: "PDF okunuyor…", de: "PDF wird gelesen…" },
+  proc_sub:    { en: "Extracting fields and translating questions. This takes a few seconds.", ar: "استخراج الحقول وترجمة الأسئلة. هذا يستغرق بضع ثوانٍ.", tr: "Alanlar çıkarılıyor. Birkaç saniye sürer.", de: "Felder werden extrahiert. Das dauert einige Sekunden." },
+  no_fields:   { en: "No fillable fields found in this PDF.", ar: "لم يتم العثور على حقول قابلة للتعبئة.", tr: "Bu PDF'de doldurulabilir alan bulunamadı.", de: "Keine ausfüllbaren Felder in dieser PDF gefunden." },
 };
 
-function t(key: string, locale: string): string {
+function t(key: string, locale: string) {
   return T[key]?.[locale] ?? T[key]?.["en"] ?? key;
 }
 
-type Stage = "idle" | "uploading" | "analysing" | "done" | "error";
+type Stage = "idle" | "processing" | "done" | "error";
 
 export default function UploadPage({ params }: { params: { locale: string } }) {
   const { locale } = params;
   const router = useRouter();
-  const { sessionToken, caseId, setLocale, setFields } = useCaseStore();
-  const [mounted, setMounted]         = useState(false);
-  const [stage, setStage]             = useState<Stage>("idle");
-  const [error, setError]             = useState<string | null>(null);
-  const [apiWarning, setApiWarning]   = useState<string | null>(null);
-  const [report, setReport]           = useState<AnalysisReport | null>(null);
+  const { sessionToken, caseId, setLocale, setFields, setPdfToken } = useCaseStore();
+  const [mounted, setMounted]       = useState(false);
+  const [stage, setStage]           = useState<Stage>("idle");
+  const [error, setError]           = useState<string | null>(null);
+  const [apiWarning, setApiWarning] = useState<string | null>(null);
+  const [report, setReport]         = useState<AnalysisReport | null>(null);
 
   useEffect(() => { setMounted(true); setLocale(locale); }, [locale, setLocale]);
 
@@ -44,72 +43,44 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
   useEffect(() => {
     if (!mounted) return;
     if (isProductionWithoutApiUrl()) {
-      setApiWarning(
-        `API not configured. Set NEXT_PUBLIC_API_URL in Vercel frontend env vars. Currently: ${API_BASE}`
-      );
+      setApiWarning(`API not configured. Set NEXT_PUBLIC_API_URL in Vercel env vars. Calling: ${API_BASE}`);
     }
   }, [mounted]);
 
-  async function handleUploadComplete(_uploadResult: UploadResponse) {
-    // _uploadResult.fields is intentionally [] — the upload route returns no questions.
-    // We must call extractPdfFields and AWAIT it before navigating.
-    if (!sessionToken || !caseId) return;
-
-    setStage("analysing");
+  async function handleFileSelected(file: File) {
+    setStage("processing");
     setError(null);
 
     try {
-      const extracted = await api.documents.extractPdfFields(sessionToken, caseId, locale);
+      // Single stateless call — no caseId needed, no DB writes on the backend.
+      const result = await api.processPdf(file, locale);
 
-      if (!extracted.fields || extracted.fields.length === 0) {
+      if (!result.fields || result.fields.length === 0 || result.extracted_field_ids.length === 0) {
         setError(t("no_fields", locale));
         setStage("error");
         return;
       }
 
-      // Authoritative field_id list from backend PDF extraction.
-      // This is the ground truth — every question must appear here.
-      const extractedFieldIds: string[] = extracted.extracted_field_ids ?? extracted.fields.map(f => f.key);
-
-      if (extractedFieldIds.length === 0) {
+      // Only show fields where show_question is not explicitly false.
+      const showable = result.fields.filter((f) => f.show_question !== false);
+      if (showable.length === 0) {
         setError(t("no_fields", locale));
         setStage("error");
         return;
       }
 
-      // Only keep fields where show_question is not explicitly false
-      const showableFields = extracted.fields.filter(
-        (f) => f.show_question !== false
-      );
-
-      if (showableFields.length === 0) {
-        setError(t("no_fields", locale));
-        setStage("error");
-        return;
-      }
-
-      // Store fields, ownership caseId, documentId, AND the authoritative extractedFieldIds.
-      // The questions page uses extractedFieldIds as the hard grounding gate.
-      setFields(showableFields, caseId, extracted.document_id, extractedFieldIds);
-      setReport(extracted.analysis_report ?? null);
+      // Store grounded fields + independent extracted_field_ids (grounding gate).
+      // caseId from store is used for fieldsForCaseId so the old ownership check still passes.
+      setFields(showable, caseId ?? "stateless", result.filename, result.extracted_field_ids);
+      // Store the signed PDF token — needed by the review page to call /fill-pdf.
+      setPdfToken(result.pdf_token);
+      setReport(result.analysis_report ?? null);
       setStage("done");
 
-      // Navigate to questions after a short delay so user can see the report
       setTimeout(() => router.push(`/${locale}/questions`), 1200);
 
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Failed to analyse PDF.";
-
-      // HTTP 404 on extract-pdf-fields means the case/session no longer exists in DB.
-      // This happens after a Vercel cold start wipes the SQLite DB.
-      // The user must start a fresh session from the landing page.
-      if (msg.includes("404") || msg.toLowerCase().includes("not found")) {
-        setError("Session expired. Please go back to the start page and begin again.");
-        setStage("error");
-        return;
-      }
-
-      // 422 = no extractable fields — not a crash, show friendly message
+      const msg = e instanceof Error ? e.message : "Failed to process PDF.";
       if (msg.includes("422") || msg.toLowerCase().includes("no field")) {
         setError(t("no_fields", locale));
       } else {
@@ -127,64 +98,43 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
       <Header />
       <main className="max-w-2xl mx-auto px-4 py-8">
         <StepProgress currentStep={0} />
-        <h1 className="text-2xl font-bold text-gray-900 mb-6">{t("upload_title", locale)}</h1>
+        <h1 className="text-2xl font-bold text-gray-900 mb-6">{t("title", locale)}</h1>
 
-        {/* Misconfiguration warning */}
         {apiWarning && (
           <div className="mb-4 p-3 bg-amber-50 border border-amber-300 rounded-lg text-amber-800 text-sm font-mono break-all">
             ⚙ {apiWarning}
           </div>
         )}
 
-        {/* Error */}
         {error && (
           <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
             {error}
             {stage === "error" && (
-              <button
-                className="ml-3 underline text-red-600"
-                onClick={() => { setStage("idle"); setError(null); }}
-              >
+              <button className="ml-3 underline" onClick={() => { setStage("idle"); setError(null); }}>
                 Try again
               </button>
             )}
           </div>
         )}
 
-        {/* Idle: show dropzone */}
         {stage === "idle" && (
           <FileDropzone
-            token={sessionToken}
-            caseId={caseId}
-            locale={locale}
-            onUploadComplete={handleUploadComplete}
+            onFileSelected={handleFileSelected}
             onError={(msg) => { setError(msg); setStage("error"); }}
-            onUploadStart={() => setStage("uploading")}
-            uploadLabel={t("upload_instr", locale)}
+            isProcessing={false}
+            uploadLabel={t("instr", locale)}
             supportedLabel={t("supported", locale)}
           />
         )}
 
-        {/* Uploading */}
-        {stage === "uploading" && (
-          <div className="text-center py-16">
-            <div className="animate-spin text-4xl mb-4">⏳</div>
-            <p className="text-gray-500">Uploading…</p>
-          </div>
-        )}
-
-        {/* Analysing: extractPdfFields in progress */}
-        {stage === "analysing" && (
+        {stage === "processing" && (
           <div className="text-center py-16">
             <div className="animate-spin text-4xl mb-4">🔍</div>
-            <p className="text-lg font-semibold text-brand-600 mb-2">
-              {t("analysing", locale)}
-            </p>
-            <p className="text-sm text-gray-400">{t("analysing_sub", locale)}</p>
+            <p className="text-lg font-semibold text-brand-600 mb-2">{t("processing", locale)}</p>
+            <p className="text-sm text-gray-400">{t("proc_sub", locale)}</p>
           </div>
         )}
 
-        {/* Done: show accuracy report before navigating */}
         {stage === "done" && report && (
           <div className="py-8">
             <div className="text-center mb-6">
@@ -194,49 +144,21 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
               </p>
               <p className="text-sm text-gray-400">Redirecting to questions…</p>
             </div>
-
-            {/* Accuracy report table */}
             <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 text-sm">
-              <h3 className="font-semibold text-gray-700 mb-3 text-xs uppercase tracking-wide">
-                Extraction report
-              </h3>
-              <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-gray-600">
-                <span>PDF type</span>
-                <span className="font-mono">{report.pdf_type}</span>
-                <span>Pages</span>
-                <span className="font-mono">{report.total_pages}</span>
-                <span>Fields extracted</span>
-                <span className="font-mono">{report.field_count}</span>
-                <span>Questions shown</span>
-                <span className="font-mono text-green-700">{report.questions_shown}</span>
-                {report.questions_blocked > 0 && (
-                  <>
-                    <span>Blocked (low confidence)</span>
-                    <span className="font-mono text-amber-600">{report.questions_blocked}</span>
-                  </>
-                )}
-                {report.low_confidence_fields > 0 && (
-                  <>
-                    <span>Needs review</span>
-                    <span className="font-mono text-yellow-600">{report.low_confidence_fields}</span>
-                  </>
-                )}
-                {report.invented_questions_removed > 0 && (
-                  <>
-                    <span>Invented (removed)</span>
-                    <span className="font-mono text-red-600">{report.invented_questions_removed}</span>
-                  </>
-                )}
-                <span>Grounding rate</span>
-                <span className="font-mono text-green-700 font-bold">{report.grounding_rate}</span>
-                <span>Coverage rate</span>
-                <span className="font-mono">{report.coverage_rate}</span>
+              <h3 className="font-semibold text-gray-700 mb-3 text-xs uppercase tracking-wide">Extraction report</h3>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-gray-600 font-mono text-xs">
+                <span>pdf_type</span>       <span>{report.pdf_type}</span>
+                <span>pages</span>          <span>{report.total_pages}</span>
+                <span>fields extracted</span><span className="text-green-700">{report.field_count}</span>
+                <span>questions shown</span> <span className="text-green-700">{report.questions_shown}</span>
+                {report.questions_blocked > 0 && <><span>blocked</span><span className="text-amber-600">{report.questions_blocked}</span></>}
+                {report.invented_questions_removed > 0 && <><span>invented removed</span><span className="text-red-600">{report.invented_questions_removed}</span></>}
+                <span>grounding rate</span>  <span className="text-green-700 font-bold">{report.grounding_rate}</span>
               </div>
             </div>
           </div>
         )}
 
-        {/* Done without report */}
         {stage === "done" && !report && (
           <div className="text-center py-16">
             <div className="text-4xl mb-3">✅</div>

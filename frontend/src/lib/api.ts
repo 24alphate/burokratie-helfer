@@ -5,6 +5,7 @@ import {
   CompletedSignal,
   FormTemplateSummary,
   PDFGenerateResponse,
+  ProcessPdfResponse,
   QuestionRead,
   SessionRead,
   UploadResponse,
@@ -225,5 +226,73 @@ export const api = {
 
     downloadUrl: (caseId: string, pdfId: string): string =>
       `${BASE}/cases/${caseId}/pdf/${pdfId}/download`,
+  },
+
+  // ── Stateless pipeline ────────────────────────────────────────────────────
+
+  /**
+   * Upload a PDF and receive grounded questions + a signed PDF token.
+   * Single call — replaces the old upload → extract-pdf-fields two-step.
+   * No caseId or session token required (stateless).
+   */
+  processPdf: async (
+    file: File,
+    userLanguage: string,
+    documentLanguage = "de",
+  ): Promise<ProcessPdfResponse> => {
+    const form = new FormData();
+    form.append("file", file);
+    const params = new URLSearchParams({ user_language: userLanguage, document_language: documentLanguage });
+    const url = `${BASE}/process-pdf?${params}`;
+
+    console.log("[processPdf] POST", url, "file:", file.name, file.size, "bytes");
+
+    let res: Response;
+    try {
+      res = await fetch(url, { method: "POST", body: form });
+    } catch (err) {
+      console.error("[processPdf] Network error:", err);
+      throw classifyError(err);
+    }
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({ detail: res.statusText }));
+      const msg = body?.detail ?? "PDF processing failed";
+      console.error("[processPdf] HTTP", res.status, msg);
+      throw classifyError(new ApiError(msg, res.status), res.status);
+    }
+    return res.json();
+  },
+
+  /**
+   * Fill the PDF with the user's answers and return a downloadable Blob.
+   * Decodes the signed pdf_token on the server — no DB or file lookup needed.
+   */
+  fillPdf: async (
+    pdfToken: string,
+    answers: Record<string, string>,
+  ): Promise<Blob> => {
+    const url = `${BASE}/fill-pdf`;
+    console.log("[fillPdf] POST", url, "answer_count:", Object.keys(answers).length);
+
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pdf_token: pdfToken, answers }),
+      });
+    } catch (err) {
+      console.error("[fillPdf] Network error:", err);
+      throw classifyError(err);
+    }
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({ detail: res.statusText }));
+      const msg = body?.detail ?? "PDF generation failed";
+      console.error("[fillPdf] HTTP", res.status, msg);
+      throw classifyError(new ApiError(msg, res.status), res.status);
+    }
+    return res.blob();
   },
 };

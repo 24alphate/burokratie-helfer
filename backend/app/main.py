@@ -10,7 +10,7 @@ from app.database import engine, SessionLocal
 from app.database import Base
 import app.models  # noqa: F401 — ensures all models registered before table creation
 
-from app.api.v1 import sessions, cases, documents, questions, templates, pdf
+from app.api.v1 import sessions, cases, documents, questions, templates, pdf, process_pdf, fill_pdf
 from app.services.ocr import OCRServiceFactory
 from app.services.translation import TranslationServiceFactory
 from app.services.pdf_generator.pypdf_generator import PDFGeneratorFactory
@@ -73,6 +73,9 @@ app.include_router(documents.router, prefix=PREFIX)
 app.include_router(questions.router, prefix=PREFIX)
 app.include_router(templates.router, prefix=PREFIX)
 app.include_router(pdf.router, prefix=PREFIX)
+# Stateless pipeline — cold-start-proof, no DB or file system between calls
+app.include_router(process_pdf.router, prefix=PREFIX)
+app.include_router(fill_pdf.router, prefix=PREFIX)
 
 
 @app.get("/health")

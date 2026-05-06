@@ -125,6 +125,18 @@ export interface PDFGenerateResponse {
   status: "ready" | "failed";
 }
 
+// ── Stateless pipeline types ──────────────────────────────────────────────────
+
+/** Response from POST /api/v1/process-pdf */
+export interface ProcessPdfResponse {
+  fields: FieldDefinition[];
+  extracted_field_ids: string[];
+  /** Signed JWT — store in Zustand, send with fillPdf() */
+  pdf_token: string;
+  analysis_report?: AnalysisReport | null;
+  filename: string;
+}
+
 export class ApiError extends Error {
   status: number;
   constructor(message: string, status: number) {

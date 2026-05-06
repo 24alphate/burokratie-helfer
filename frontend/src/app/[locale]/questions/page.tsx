@@ -130,7 +130,7 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
     sessionToken, caseId,
     fields, fieldsForCaseId,
     documentId, extractedFieldIds,
-    answeredKeys, addAnsweredKey,
+    answeredKeys, addAnswer,
   } = useCaseStore();
   const [mounted, setMounted] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -186,10 +186,6 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
   const answeredCount   = questionFields.length - unanswered.length;
   const totalCount      = questionFields.length;
   const prefillCount    = groundedFields.filter((f) => f.is_prefilled && f.show_question !== false).length;
-
-  // Retrieve analysis_report from the store (stored alongside fields in the upload page)
-  // We re-derive it from the extractedFieldIds / fields for the debug panel
-  const debugReport = useCaseStore.getState() as any;
 
   useEffect(() => {
     if (mounted && safeFields.length > 0 && unanswered.length === 0 && groundedFields.length > 0) {
@@ -263,23 +259,20 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
   };
 
   async function handleAnswer(rawAnswer: string) {
-    if (!nextField || !sessionToken || !caseId) return;
+    if (!nextField) return;
     setIsLoading(true);
     setSubmitError(null);
     try {
-      const result = await api.questions.submitAnswer(
-        sessionToken, caseId, nextField.key, rawAnswer
-      );
-      if (!result.is_validated && result.validation_errors.length > 0) {
-        setSubmitError(result.validation_errors[0]);
-        return;
+      // Store answer locally for stateless PDF generation.
+      // The backend submitAnswer call is kept for audit purposes but is not critical.
+      if (sessionToken && caseId) {
+        api.questions.submitAnswer(sessionToken, caseId, nextField.key, rawAnswer).catch(() => {});
       }
-    } catch {
-      // Backend may reject after cold start — still advance client-side
     } finally {
       setIsLoading(false);
     }
-    addAnsweredKey(nextField.key);
+    // addAnswer stores both key (for progress) and value (for fill-pdf).
+    addAnswer(nextField.key, rawAnswer);
   }
 
   return (
