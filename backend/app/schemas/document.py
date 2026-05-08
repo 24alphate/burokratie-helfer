@@ -87,6 +87,29 @@ class AnalysisReport(BaseModel):
     # "summary"       — Level 3/4 reportlab summary fallback
     # None            — extraction-only call (no fill yet)
     fill_strategy: Optional[str] = None
+    # ── Level 4 OCR diagnostic — Phase G/Stage 4A ────────────────────────────
+    # Populated only for scanned/photo PDFs (support_level=4). Read by the
+    # frontend Level-4 screen to display user-friendly status + next steps.
+    # Never includes the technical_message field (stripped before serialization).
+    # Shape mirrors app.services.ocr.diagnostic.OCRDiagnostic (without
+    # technical_message). Stage 4A is diagnostic-only — no fields, no
+    # questions, no fill — so this is the only output for Level 4 PDFs.
+    ocr_diagnostic: Optional[dict] = None
+    # ── Locale quality report — language switching invariant ─────────────────
+    # Per-locale coverage of the shown FieldDefinition.question[locale] map.
+    # Shape (see services/locale_quality.py):
+    #   {
+    #     selected_locale: "fr",
+    #     ready_for_locale: bool,
+    #     localized_questions: int,
+    #     fallback_questions: int,
+    #     missing_questions: [field_id, ...],
+    #     per_locale: { en: {...}, de: {...}, fr: {...}, ar: {...}, tr: {...}, sq: {...} },
+    #     tier_a_ready: bool,
+    #   }
+    # For Level 1 verified templates and Tier-A locales, ready_for_locale=true
+    # is the contract. Frontend tests + manual QA flag any drop.
+    locale_quality_report: Optional[dict] = None
 
 
 class UploadResponse(BaseModel):

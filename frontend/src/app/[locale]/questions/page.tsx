@@ -15,6 +15,7 @@ import { useCaseStore } from "@/store/caseStore";
 import { api } from "@/lib/api";
 import { AnalysisReport, QuestionRead, FieldDefinition } from "@/types/api";
 import { cleanHumanLabel } from "@/lib/labelUtils";
+import { t as ti18n } from "@/lib/i18n";
 
 const LOADING: Record<string, string> = {
   en: "Reading your document…", de: "Dokument wird gelesen…",
@@ -225,7 +226,7 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
     uploadAttemptId, fieldsForUploadAttemptId,
     answeredKeys, answeredValues, addAnswer,
     markSaved, clearCurrentDocument,
-    supportLevel, templateId,
+    supportLevel, templateId, ocrDiagnostic,
   } = useCaseStore();
   const [mounted, setMounted]       = useState(false);
   const [isLoading, setIsLoading]   = useState(false);
@@ -341,19 +342,19 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
   if (safeFields.length > 0 && safeExtracted.length === 0) {
     return (
       <>
-        <Header />
+        <Header locale={locale} />
         <main className="max-w-2xl mx-auto px-4 py-8">
-          <StepProgress currentStep={1} />
+          <StepProgress currentStep={1} locale={locale} />
           <div className="p-6 bg-red-50 border border-red-200 rounded-xl">
-            <p className="text-red-700 font-semibold mb-2">No fields were extracted from this PDF.</p>
+            <p className="text-red-700 font-semibold mb-2">{ti18n("q.no_grounding", locale)}</p>
             <p className="text-red-600 text-sm mb-4">
-              The app cannot safely generate questions without a verified PDF field map.
+              {ti18n("q.no_grounding_body", locale)}
             </p>
             <button
               onClick={() => router.replace(`/${locale}/upload`)}
               className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700"
             >
-              Upload again
+              {ti18n("q.upload_again", locale)}
             </button>
           </div>
           <DebugPanel
@@ -414,11 +415,93 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
       const title = L4_TITLE[locale] ?? L4_TITLE.en;
       const body  = L4_BODY[locale]  ?? L4_BODY.en;
       const btn   = L4_BUTTON[locale] ?? L4_BUTTON.en;
+
+      // Stage 4A — OCR diagnostic panel. Only shown when the backend
+      // returned an ocr_diagnostic (always for support_level=4 PDFs after
+      // Stage 4A; absent on legacy responses signed before Stage 4A shipped).
+      // The status drives copy; the user_message is the headline.
+      const OCR_HEADER: Record<string, string> = {
+        en: "We tried to read this scanned document",
+        de: "Wir haben versucht, dieses gescannte Dokument zu lesen",
+        fr: "Nous avons essayé de lire ce document scanné",
+        ar: "حاولنا قراءة هذا المستند الممسوح ضوئيًا",
+        tr: "Bu taranmış belgeyi okumaya çalıştık",
+        sq: "Provuam ta lexojmë këtë dokument të skanuar",
+        es: "Intentamos leer este documento escaneado",
+        fa: "تلاش کردیم این سند اسکن شده را بخوانیم",
+        ru: "Мы попытались прочитать этот отсканированный документ",
+        uk: "Ми спробували прочитати цей сканований документ",
+      };
+      const OCR_PAGES_LABEL: Record<string, string> = {
+        en: "Pages read", de: "Gelesene Seiten", fr: "Pages lues",
+        ar: "الصفحات المقروءة", tr: "Okunan sayfalar", sq: "Faqe të lexuara",
+        es: "Páginas leídas", fa: "صفحات خوانده شده",
+        ru: "Прочитанные страницы", uk: "Прочитані сторінки",
+      };
+      const OCR_CONFIDENCE_LABEL: Record<string, string> = {
+        en: "Average confidence", de: "Durchschnittliche Genauigkeit",
+        fr: "Confiance moyenne", ar: "متوسط الثقة",
+        tr: "Ortalama güven", sq: "Besimi mesatar",
+        es: "Confianza promedio", fa: "میانگین اطمینان",
+        ru: "Средняя уверенность", uk: "Середня впевненість",
+      };
+
+      // Localized status copy. The backend's user_message is English; we
+      // override with locale-specific text when we have it for this status.
+      const _localizedOcrCopy = (): string | null => {
+        if (!ocrDiagnostic) return null;
+        const dict: Record<string, Record<string, string>> = {
+          readable: {
+            en: "We can read some text from this scan, but OCR form filling is not enabled yet. This scan may be usable in a future step.",
+            de: "Wir können Text aus diesem Scan lesen, aber das automatische Ausfüllen per OCR ist noch nicht aktiviert. Dieser Scan könnte in einem späteren Schritt nutzbar sein.",
+            fr: "Nous pouvons lire du texte de ce scan, mais le remplissage automatique par OCR n'est pas encore activé. Ce scan pourra être utilisé plus tard.",
+            ar: "يمكننا قراءة بعض النصوص من هذا المسح، لكن التعبئة التلقائية للنماذج عبر OCR غير مفعلة بعد.",
+            tr: "Bu taramadan biraz metin okuyabiliyoruz, ancak OCR ile otomatik doldurma henüz etkin değil.",
+            sq: "Mund të lexojmë pak tekst nga ky skanim, por plotësimi automatik i formularit me OCR nuk është aktivizuar ende.",
+          },
+          low_confidence: {
+            en: "The scan is hard to read. Try again with better lighting, a flat page, and no shadows.",
+            de: "Der Scan ist schwer zu lesen. Versuchen Sie es erneut mit besserem Licht, einer flachen Seite und ohne Schatten.",
+            fr: "Le scan est difficile à lire. Réessayez avec un meilleur éclairage, une page plate et sans ombres.",
+            ar: "المسح صعب القراءة. حاول مرة أخرى بإضاءة أفضل وصفحة مسطحة وبدون ظلال.",
+            tr: "Tarama okunması zor. Daha iyi ışıkta, düz bir sayfada ve gölgesiz tekrar deneyin.",
+            sq: "Skanimi është i vështirë për t'u lexuar. Provoni përsëri me dritë më të mirë, faqe të rrafshët dhe pa hije.",
+          },
+          no_text_found: {
+            en: "We could not read text from this image. Please upload a digital PDF or retake the photo.",
+            de: "Wir konnten keinen Text aus diesem Bild lesen. Bitte laden Sie eine digitale PDF hoch oder fotografieren Sie erneut.",
+            fr: "Nous n'avons pas pu lire de texte sur cette image. Veuillez téléverser un PDF numérique ou reprendre la photo.",
+            ar: "لم نتمكن من قراءة نص من هذه الصورة. يرجى تحميل ملف PDF رقمي أو إعادة التقاط الصورة.",
+            tr: "Bu görüntüden metin okuyamadık. Lütfen dijital bir PDF yükleyin veya fotoğrafı yeniden çekin.",
+            sq: "Nuk mund të lexojmë tekst nga kjo imazh. Ngarkoni një PDF dixhital ose rifotografojeni.",
+          },
+          ocr_unavailable: {
+            en: "OCR is not installed on this server yet.",
+            de: "OCR ist auf diesem Server noch nicht installiert.",
+            fr: "L'OCR n'est pas encore installé sur ce serveur.",
+            ar: "OCR غير مثبت على هذا الخادم بعد.",
+            tr: "Bu sunucuda OCR henüz kurulu değil.",
+            sq: "OCR nuk është instaluar ende në këtë server.",
+          },
+          failed: {
+            en: "We could not read this document. Please try again or upload a digital PDF.",
+            de: "Wir konnten dieses Dokument nicht lesen. Bitte versuchen Sie es erneut oder laden Sie eine digitale PDF hoch.",
+            fr: "Nous n'avons pas pu lire ce document. Veuillez réessayer ou téléverser un PDF numérique.",
+            ar: "لم نتمكن من قراءة هذا المستند. يرجى المحاولة مرة أخرى أو تحميل ملف PDF رقمي.",
+            tr: "Bu belgeyi okuyamadık. Lütfen tekrar deneyin veya dijital bir PDF yükleyin.",
+            sq: "Nuk mund ta lexojmë këtë dokument. Provoni përsëri ose ngarkoni një PDF dixhital.",
+          },
+        };
+        const statusDict = dict[ocrDiagnostic.diagnostic_status];
+        if (!statusDict) return ocrDiagnostic.user_message;
+        return statusDict[locale] ?? statusDict.en ?? ocrDiagnostic.user_message;
+      };
+
       return (
         <>
-          <Header />
+          <Header locale={locale} />
           <main className="max-w-2xl mx-auto px-4 py-8">
-            <StepProgress currentStep={1} />
+            <StepProgress currentStep={1} locale={locale} />
             <SupportLevelBanner supportLevel={4} locale={locale} />
             <div
               data-testid="level4-unsupported"
@@ -427,6 +510,37 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
               <div className="text-5xl mb-3" aria-hidden>📄</div>
               <p className="text-gray-900 font-semibold text-lg mb-2">{title}</p>
               <p className="text-gray-600 text-sm mb-5 max-w-md mx-auto">{body}</p>
+
+              {ocrDiagnostic && (
+                <div
+                  data-testid="ocr-diagnostic-panel"
+                  className="mt-2 mb-5 p-4 bg-gray-50 border border-gray-200 rounded-lg text-left max-w-md mx-auto"
+                >
+                  <p className="text-sm font-semibold text-gray-700 mb-2">
+                    {OCR_HEADER[locale] ?? OCR_HEADER.en}
+                  </p>
+                  <p className="text-sm text-gray-600 mb-3">
+                    {_localizedOcrCopy()}
+                  </p>
+                  {ocrDiagnostic.diagnostic_status !== "ocr_unavailable" && ocrDiagnostic.page_count > 0 && (
+                    <div className="text-xs text-gray-500 space-y-1">
+                      <p>
+                        {OCR_PAGES_LABEL[locale] ?? OCR_PAGES_LABEL.en}:{" "}
+                        <span className="font-mono text-gray-700">
+                          {ocrDiagnostic.readable_pages} / {ocrDiagnostic.page_count}
+                        </span>
+                      </p>
+                      <p>
+                        {OCR_CONFIDENCE_LABEL[locale] ?? OCR_CONFIDENCE_LABEL.en}:{" "}
+                        <span className="font-mono text-gray-700">
+                          {Math.round(ocrDiagnostic.average_confidence * 100)}%
+                        </span>
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+
               <button
                 onClick={() => router.replace(`/${locale}/upload`)}
                 className="px-5 py-2.5 bg-brand-600 text-white rounded-xl text-sm font-medium hover:bg-brand-700"
@@ -441,11 +555,11 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
 
     return (
       <>
-        <Header />
+        <Header locale={locale} />
         <main className="max-w-2xl mx-auto px-4 py-8">
-          <StepProgress currentStep={1} />
+          <StepProgress currentStep={1} locale={locale} />
           <div className="text-center py-16 text-gray-400 text-lg">
-            {LOADING[locale] ?? "Loading…"}
+            {LOADING[locale] ?? ti18n("q.loading", locale)}
           </div>
         </main>
       </>
@@ -542,9 +656,9 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
         />
       )}
 
-      <Header />
+      <Header locale={locale} />
       <main className="max-w-2xl mx-auto px-4 py-8">
-        <StepProgress currentStep={1} />
+        <StepProgress currentStep={1} locale={locale} />
 
         <SupportLevelBanner
           supportLevel={supportLevel}
@@ -612,27 +726,11 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
         {/* Progress line */}
         <div className="mb-3 flex items-center gap-3 text-sm text-gray-400">
           <span>
-            {locale === "ar" || locale === "fa"
-              ? `سؤال ${currentIndex} من ${totalCount}`
-              : locale === "de"
-              ? `Frage ${currentIndex} von ${totalCount}`
-              : locale === "fr"
-              ? `Question ${currentIndex} sur ${totalCount}`
-              : locale === "es"
-              ? `Pregunta ${currentIndex} de ${totalCount}`
-              : locale === "tr"
-              ? `Soru ${currentIndex} / ${totalCount}`
-              : locale === "sq"
-              ? `Pyetja ${currentIndex} nga ${totalCount}`
-              : locale === "ru"
-              ? `Вопрос ${currentIndex} из ${totalCount}`
-              : locale === "uk"
-              ? `Питання ${currentIndex} з ${totalCount}`
-              : `Question ${currentIndex} of ${totalCount}`}
+            {ti18n("q.question_n_of_m", locale, { n: currentIndex, m: totalCount })}
             {totalCount - answeredCount > 0 && (
               <span className="ml-2 text-amber-600">
                 · {totalCount - answeredCount}{" "}
-                {locale === "de" ? "fehlend" : locale === "ar" || locale === "fa" ? "مفقود" : locale === "tr" ? "eksik" : locale === "fr" ? "manquant" : locale === "es" ? "pendiente" : locale === "sq" ? "mungon" : locale === "ru" ? "нет ответа" : locale === "uk" ? "без відповіді" : "missing"}
+                {ti18n("q.missing", locale)}
               </span>
             )}
           </span>

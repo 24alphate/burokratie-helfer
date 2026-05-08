@@ -1245,9 +1245,25 @@ VERIFIED_BY_LABEL: dict[str, dict[str, dict[str, str]]] = {
             "question": "Quel est le lieu de départ du trajet ?",
             "help": "Écrivez l'adresse ou le nom du lieu de départ.",
         },
-        "ar": {"question": "ما هو مكان انطلاق الرحلة؟"},
-        "tr": {"question": "Yolculuğun başlangıç noktası nedir?"},
-        "de": {"question": "Was ist der Startort der Fahrt?"},
+        "ar": {
+            "question": "ما هو مكان انطلاق الرحلة؟",
+            "help": "اكتب عنوان أو اسم المكان الذي تبدأ منه الرحلة.",
+        },
+        "tr": {
+            "question": "Yolculuğun başlangıç noktası nedir?",
+            "help": "Yolculuğun başladığı yerin adresini veya adını yazın.",
+        },
+        "de": {
+            "question": "Was ist der Startort der Fahrt?",
+            "help": "Tragen Sie die Adresse oder den Namen des Startorts ein.",
+        },
+        "sq": {
+            "question": "Cili është vendi i nisjes së udhëtimit?",
+            "help": "Shkruani adresën ose emrin e vendit ku fillon udhëtimi.",
+        },
+        "es": {"question": "¿Cuál es el lugar de partida del viaje?"},
+        "ru": {"question": "Какое место отправления поездки?"},
+        "uk": {"question": "Яке місце відправлення поїздки?"},
     },
 
     "zielort": {
@@ -1259,9 +1275,25 @@ VERIFIED_BY_LABEL: dict[str, dict[str, dict[str, str]]] = {
             "question": "Quelle est la destination du trajet ?",
             "help": "Écrivez l'adresse ou le nom de la destination.",
         },
-        "ar": {"question": "ما هي وجهة الرحلة؟"},
-        "tr": {"question": "Yolculuğun varış noktası nedir?"},
-        "de": {"question": "Was ist der Zielort der Fahrt?"},
+        "ar": {
+            "question": "ما هي وجهة الرحلة؟",
+            "help": "اكتب عنوان أو اسم وجهة الرحلة.",
+        },
+        "tr": {
+            "question": "Yolculuğun varış noktası nedir?",
+            "help": "Varış yerinin adresini veya adını yazın.",
+        },
+        "de": {
+            "question": "Was ist der Zielort der Fahrt?",
+            "help": "Tragen Sie die Adresse oder den Namen des Zielorts ein.",
+        },
+        "sq": {
+            "question": "Cili është destinacioni i udhëtimit?",
+            "help": "Shkruani adresën ose emrin e destinacionit.",
+        },
+        "es": {"question": "¿Cuál es el destino del viaje?"},
+        "ru": {"question": "Какое место назначения поездки?"},
+        "uk": {"question": "Яке місце призначення поїздки?"},
     },
 }
 
@@ -1273,6 +1305,12 @@ def lookup_verified(field_id: str, original_label: str, locale: str) -> dict[str
     Result dict may contain: question, help, example, format.
     Checks field_id first, then normalized original_label.
     Falls back locale → "en" within the matched entry.
+
+    For Tier-A locales (en/de/fr/ar/tr/sq) callers should prefer
+    `lookup_verified_strict()` so missing-locale gaps surface as a
+    quality-report signal rather than hiding behind a silent English
+    fallback. This function keeps the legacy permissive behavior for
+    backwards compatibility with the per-field pre-resolution path.
     """
     # 1. Check by field_id (exact match)
     entry = VERIFIED_BY_FIELD_ID.get(field_id)
@@ -1287,3 +1325,42 @@ def lookup_verified(field_id: str, original_label: str, locale: str) -> dict[str
         return entry.get(locale) or entry.get("en")
 
     return None
+
+
+def lookup_verified_strict(field_id: str, original_label: str, locale: str) -> dict[str, str] | None:
+    """
+    Strict variant: returns the verified entry only if the requested locale
+    is actually present. Used by the locale-quality reporter to detect
+    Tier-A coverage gaps. Returns None when:
+      - the field has no verified entry at all, or
+      - the entry exists but lacks `locale`.
+    """
+    entry = VERIFIED_BY_FIELD_ID.get(field_id)
+    if entry and locale in entry:
+        return entry[locale]
+
+    import re
+    normalized = re.sub(r"\s+\d+$", "", original_label.strip()).strip().lower()
+    entry = VERIFIED_BY_LABEL.get(normalized)
+    if entry and locale in entry:
+        return entry[locale]
+
+    return None
+
+
+def get_all_locales_for_field(field_id: str, original_label: str) -> dict[str, dict[str, str]]:
+    """
+    Return the full {locale: {question, help, ...}} mapping for a verified field.
+    Empty dict if the field has no verified entry. Used to pre-fill
+    FieldDefinition.question with every Tier-A locale at once so the
+    frontend can switch language without reprocessing.
+    """
+    entry = VERIFIED_BY_FIELD_ID.get(field_id)
+    if entry:
+        return entry
+    import re
+    normalized = re.sub(r"\s+\d+$", "", original_label.strip()).strip().lower()
+    entry = VERIFIED_BY_LABEL.get(normalized)
+    if entry:
+        return entry
+    return {}

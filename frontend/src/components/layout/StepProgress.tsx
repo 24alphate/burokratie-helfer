@@ -1,18 +1,23 @@
 "use client";
 
 import { clsx } from "clsx";
+import { t } from "@/lib/i18n";
 
-const STEPS = ["Upload", "Questions", "Review", "Download"];
+const STEP_KEYS = ["step.upload", "step.questions", "step.review", "step.download"];
 
 interface StepProgressProps {
   currentStep: 0 | 1 | 2 | 3;
+  /** Locale for step labels. Falls back to "en". */
+  locale?: string;
+  /** Optional override for step labels (already translated). */
   labels?: string[];
 }
 
-export function StepProgress({ currentStep, labels = STEPS }: StepProgressProps) {
+export function StepProgress({ currentStep, locale = "en", labels }: StepProgressProps) {
+  const resolvedLabels = labels ?? STEP_KEYS.map((k) => t(k, locale));
   return (
     <div className="w-full flex items-center justify-between mb-8">
-      {labels.map((label, i) => (
+      {resolvedLabels.map((label, i) => (
         <div key={i} className="flex items-center flex-1">
           <div className="flex flex-col items-center">
             <div
@@ -34,7 +39,7 @@ export function StepProgress({ currentStep, labels = STEPS }: StepProgressProps)
               {label}
             </span>
           </div>
-          {i < labels.length - 1 && (
+          {i < resolvedLabels.length - 1 && (
             <div
               className={clsx(
                 "flex-1 h-0.5 mx-2 -mt-4",

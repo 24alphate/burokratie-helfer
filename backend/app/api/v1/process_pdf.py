@@ -98,6 +98,89 @@ class ProcessPdfResponse(BaseModel):
     ai_used: bool = False
 
 
+def _build_scanned_response(
+    *,
+    content: bytes,
+    extraction,
+    ocr_diag_dict: dict,
+    user_language: str,
+    document_language: str,
+    filename: str,
+    ai_was_used: bool,
+    no_ai_mode: bool,
+) -> ProcessPdfResponse:
+    """
+    Stage 4A — short-circuit response for Level-4 (scanned/photo) PDFs.
+
+    Returns a 200 OK with:
+      • support_level = 4
+      • fields = []
+      • extracted_field_ids = []
+      • analysis_report.ocr_diagnostic populated (technical_message stripped)
+      • a signed pdf_token (so the existing UI plumbing doesn't crash) but
+        no fields → /fill-pdf would 422 anyway because there are no answers
+        to send. The token isn't intended to be used.
+
+    No question generation, no LLM, no PDF fill. Strictly diagnostic.
+    """
+    # Strip the technical_message before serialization — it's developer-
+    # facing only and may contain language pack names / file paths.
+    safe_ocr = dict(ocr_diag_dict)
+    safe_ocr.pop("technical_message", None)
+
+    # Build a minimal AnalysisReport. The acroform_metrics + question_quality
+    # fields stay None / zero — no questions exist for the user to assess.
+    analysis = AnalysisReport(
+        pdf_type=extraction.pdf_type,
+        total_pages=extraction.total_pages,
+        field_count=0,
+        questions_shown=0,
+        questions_blocked=0,
+        low_confidence_fields=0,
+        invented_questions_removed=0,
+        coverage_rate="0%",
+        grounding_rate="100%",   # vacuously true — no fields to ground
+        grounding_ok=True,
+        template_id=None,
+        extraction_source=extraction.extraction_source,
+        support_level=extraction.support_level,
+        translation_locale=user_language,
+        translation_total=0,
+        translation_translated=0,
+        translation_fallback=0,
+        translation_fallback_ids=[],
+        question_quality=None,
+        acroform_metrics=None,
+        fill_strategy=None,        # Level 4 has no fill path yet
+        ocr_diagnostic=safe_ocr,
+    )
+
+    # Sign a token so frontend state remains consistent (the questions page
+    # checks for a token before rendering). The token holds the original
+    # bytes + an empty field_ids list. /fill-pdf will reject it because the
+    # grounding guard requires at least one valid answer key, which the UI
+    # has no way to produce — fields are empty.
+    pdf_token = sign_pdf_token(
+        pdf_bytes=content,
+        field_ids=[],
+        filename=filename,
+        secret_key=settings.secret_key,
+        template_id=None,
+        support_level=4,
+    )
+
+    return ProcessPdfResponse(
+        fields=[],
+        extracted_field_ids=[],
+        pdf_token=pdf_token,
+        analysis_report=analysis,
+        filename=filename,
+        raw_extracted_fields=[],
+        ai_comparison=[],
+        ai_used=ai_was_used,
+    )
+
+
 @router.post("/process-pdf", response_model=ProcessPdfResponse)
 async def process_pdf(
     file: UploadFile = File(...),
@@ -149,6 +232,40 @@ async def process_pdf(
         extraction.pdf_type, extraction.total_pages, len(extraction.fields), extracted_ids[:10],
     )
 
+    # Stage 4A — when the router returns Level 4 (scanned/photo) we
+    # short-circuit into the OCR diagnostic-only path. Result: 200 OK with
+    # `fields=[]`, `extracted_field_ids=[]`, and `ocr_diagnostic` populated.
+    # NO question generation, NO PDF fill, NO LLM. The frontend Level-4
+    # screen renders user-friendly copy from `ocr_diagnostic.diagnostic_status`.
+    if extraction.support_level == 4:
+        from app.services.ocr.tesseract_provider import get_default_provider
+        ocr_provider = get_default_provider()
+        ocr_diag = ocr_provider.diagnose(content)
+        log.info(
+            "process-pdf OCR_DIAGNOSTIC provider=%s status=%s avg_conf=%.3f "
+            "pages=%d/%d readable=%d/%d tech=%s",
+            ocr_diag.provider, ocr_diag.diagnostic_status,
+            ocr_diag.average_confidence, ocr_diag.page_count,
+            ocr_diag.page_count, ocr_diag.readable_pages, ocr_diag.page_count,
+            ocr_diag.technical_message,
+        )
+        # Normalize to Pydantic-friendly dict shape for AnalysisReport
+        from dataclasses import asdict
+        ocr_diag_dict = asdict(ocr_diag)
+        # Strip the technical_message for ANY user-facing serialization
+        # (Pydantic will pass it through; we explicitly drop it before the
+        # JSON response leaves the API layer below.)
+        return _build_scanned_response(
+            content=content,
+            extraction=extraction,
+            ocr_diag_dict=ocr_diag_dict,
+            user_language=user_language,
+            document_language=document_language,
+            filename=filename,
+            ai_was_used=False,
+            no_ai_mode=no_ai,
+        )
+
     if not extraction.fields:
         detail = {
             "acroform": "This PDF has an AcroForm but no extractable widget fields.",
@@ -187,6 +304,15 @@ async def process_pdf(
     for entry in extraction.fields:
         fid   = entry.field_id
         label = entry.original_label
+
+        # Phase F1 follow-up — Manual fields (confidence <= 0.5) are filtered
+        # out of the question UI by the confidence gate downstream
+        # (show_question=False for conf < CONF_SHOW_MIN=0.70). There is no
+        # value in translating them — and translating them via AI would
+        # falsely violate the Level 1 "ai_calls_made=0" invariant for
+        # any verified template that legitimately marks fields as manual.
+        if entry.confidence <= 0.5:
+            continue
 
         # Priority 1: verified human question
         verified = lookup_verified(fid, label, user_language)
@@ -227,7 +353,11 @@ async def process_pdf(
                 "_source": "deterministic",
             }
 
-    # Build Groq input for unresolved fields only
+    # Build Groq input for unresolved fields only.
+    # Phase F1 follow-up: also skip manual (confidence <= 0.5) fields here
+    # so they don't show up in ai_call_count even when GROQ_API_KEY is unset
+    # (translate_fields can still fall through to static_fallback). Same
+    # rationale as the pre_resolved skip above.
     fields_for_groq = [
         {
             "field_name":     e.field_id,
@@ -236,7 +366,7 @@ async def process_pdf(
             "original_label": e.original_label,
         }
         for e in extraction.fields
-        if e.field_id not in pre_resolved
+        if e.field_id not in pre_resolved and e.confidence > 0.5
     ]
 
     groq_key_set = bool(os.environ.get("GROQ_API_KEY", "").strip())
@@ -429,19 +559,48 @@ async def process_pdf(
     # use the AcroForm fill path (e.g. KG1). The template lookup is cheap
     # (in-memory cache) and always succeeds when extraction.template_id was
     # set, but we defensively fall back to "fitz_overlay" if it doesn't.
+    #
+    # Phase F6 follow-up: the new "fitz_acroform" backend is normalized to
+    # "acroform" in the public advertisement — both backends write into the
+    # original PDF's AcroForm widgets and produce the same user-facing
+    # "fillable PDF" experience. The internal backend choice is an
+    # implementation detail; the X-Fill-Strategy download header also says
+    # "acroform" for both.
     if extraction.support_level == 1:
         fill_strategy = "fitz_overlay"
         if extraction.template_id:
             from app.services.form_templates import find_template_by_id
             tmpl = find_template_by_id(extraction.template_id)
             if tmpl is not None:
-                fill_strategy = getattr(tmpl, "fill_strategy", "fitz_overlay")
+                _raw = getattr(tmpl, "fill_strategy", "fitz_overlay")
+                # Normalize fitz_acroform → acroform for the public surface
+                fill_strategy = "acroform" if _raw == "fitz_acroform" else _raw
     elif extraction.support_level == 2:
         fill_strategy = "acroform"
     elif extraction.support_level == 3:
         fill_strategy = "summary"
     else:
         fill_strategy = None
+
+    # ── Locale quality report (language-switch invariant) ───────────────────
+    from app.services.locale_quality import build_locale_quality_report
+    locale_quality = build_locale_quality_report(
+        shown_fields=shown_defs,
+        selected_locale=user_language,
+        document_language=document_language,
+        extraction_source=extraction.extraction_source,
+        support_level=extraction.support_level,
+    )
+    log.info(
+        "process-pdf LOCALE_QUALITY locale=%s ready=%s tier_a_ready=%s "
+        "localized=%d fallback=%d missing=%d",
+        user_language,
+        locale_quality["ready_for_locale"],
+        locale_quality["tier_a_ready"],
+        locale_quality["localized_questions"],
+        locale_quality["fallback_questions"],
+        len(locale_quality["missing_questions"]),
+    )
 
     analysis = AnalysisReport(
         pdf_type=pipeline_report.pdf_type,
@@ -465,6 +624,7 @@ async def process_pdf(
         question_quality=quality_report,
         acroform_metrics=acroform_metrics,
         fill_strategy=fill_strategy,
+        locale_quality_report=locale_quality,
     )
 
     shown = shown_defs

@@ -9,18 +9,19 @@ import { FileDropzone } from "@/components/upload/FileDropzone";
 import { useCaseStore } from "@/store/caseStore";
 import { api, API_BASE, isProductionWithoutApiUrl } from "@/lib/api";
 import { AnalysisReport, AIComparisonEntry, RawFieldEntry } from "@/types/api";
+import { t } from "@/lib/i18n";
 
-const T: Record<string, Record<string, string>> = {
-  title:      { en: "Upload your PDF form", ar: "ارفع نموذج PDF", tr: "PDF formunuzu yükleyin", de: "PDF-Formular hochladen" },
-  instr:      { en: "Drop any fillable PDF — fields are read directly from your document.", ar: "أسقط أي نموذج PDF — تُقرأ الحقول مباشرة من مستندك.", tr: "Doldurulabilir PDF'yi bırakın.", de: "Beliebiges PDF ablegen." },
-  supported:  { en: "Any fillable PDF (government forms, contracts, applications…)", ar: "أي نموذج PDF قابل للتعبئة", tr: "Her doldurulabilir PDF", de: "Jedes ausfüllbare PDF" },
-  processing: { en: "Reading your PDF…", ar: "جارٍ قراءة ملف PDF…", tr: "PDF okunuyor…", de: "PDF wird gelesen…" },
-  proc_sub:   { en: "Extracting fields and translating questions. This takes a few seconds.", ar: "استخراج الحقول وترجمة الأسئلة.", tr: "Alanlar çıkarılıyor.", de: "Felder werden extrahiert." },
-  no_fields:  { en: "No fillable fields found in this PDF.", ar: "لم يتم العثور على حقول.", tr: "Alan bulunamadı.", de: "Keine ausfüllbaren Felder gefunden." },
-};
-
-function t(key: string, locale: string) {
-  return T[key]?.[locale] ?? T[key]?.["en"] ?? key;
+// Map old short keys to centralized i18n keys (kept for minimal diff in JSX).
+function tu(key: string, locale: string): string {
+  const map: Record<string, string> = {
+    title:      "upload.title",
+    instr:      "upload.instr",
+    supported:  "upload.supported",
+    processing: "upload.processing",
+    proc_sub:   "upload.proc_sub",
+    no_fields:  "upload.no_fields",
+  };
+  return t(map[key] ?? key, locale);
 }
 
 type Stage = "idle" | "processing" | "done" | "error";
@@ -188,17 +189,7 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
       // Log to console so devs see it, but show users a generic
       // "service unavailable" message instead of leaking env-var names.
       console.error("[upload] API not configured. Set NEXT_PUBLIC_API_URL.");
-      setApiWarning(
-        locale === "de" ? "Der Dienst ist gerade nicht erreichbar. Bitte versuchen Sie es später erneut."
-        : locale === "ar" ? "الخدمة غير متاحة الآن. يرجى المحاولة لاحقًا."
-        : locale === "tr" ? "Hizmet şu anda kullanılamıyor. Lütfen daha sonra tekrar deneyin."
-        : locale === "fr" ? "Le service est actuellement indisponible. Veuillez réessayer plus tard."
-        : locale === "es" ? "El servicio no está disponible ahora. Inténtelo más tarde."
-        : locale === "sq" ? "Shërbimi nuk është i disponueshëm tani. Provoni më vonë."
-        : locale === "ru" ? "Сервис сейчас недоступен. Попробуйте позже."
-        : locale === "uk" ? "Сервіс зараз недоступний. Спробуйте пізніше."
-        : "The service is unavailable right now. Please try again later."
-      );
+      setApiWarning(t("upload.api_unavailable", locale));
     }
   }, [mounted, locale]);
 
@@ -228,14 +219,14 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
       setAiUsed(result.ai_used ?? false);
 
       if (!result.fields || result.fields.length === 0 || result.extracted_field_ids.length === 0) {
-        setError(t("no_fields", locale));
+        setError(tu("no_fields", locale));
         setStage("error");
         return;
       }
 
       const showable = result.fields.filter((f) => f.show_question !== false);
       if (showable.length === 0) {
-        setError(t("no_fields", locale));
+        setError(tu("no_fields", locale));
         setStage("error");
         return;
       }
@@ -249,6 +240,16 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
         {
           supportLevel: result.analysis_report?.support_level ?? null,
           templateId: result.analysis_report?.template_id ?? null,
+          ocrDiagnostic: result.analysis_report?.ocr_diagnostic
+            ? {
+                diagnostic_status: result.analysis_report.ocr_diagnostic.diagnostic_status,
+                user_message: result.analysis_report.ocr_diagnostic.user_message,
+                page_count: result.analysis_report.ocr_diagnostic.page_count,
+                readable_pages: result.analysis_report.ocr_diagnostic.readable_pages,
+                average_confidence: result.analysis_report.ocr_diagnostic.average_confidence,
+                provider: result.analysis_report.ocr_diagnostic.provider,
+              }
+            : null,
         },
       );
       setPdfToken(result.pdf_token);
@@ -292,23 +293,24 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
   return (
     <>
       <Header
+        locale={locale}
         onLogoClick={stage === "processing"
           ? () => setShowLeaveModal(true)
           : undefined}
       />
       {showLeaveModal && (
         <ConfirmModal
-          title={locale === "de" ? "Seite verlassen?" : locale === "ar" ? "مغادرة الصفحة؟" : locale === "tr" ? "Sayfadan ayrılınsın mı?" : "Leave page?"}
-          message={locale === "de" ? "Die PDF wird noch verarbeitet. Wenn Sie jetzt gehen, geht der Fortschritt verloren." : locale === "ar" ? "لا يزال ملف PDF قيد المعالجة. إذا غادرت الآن، ستفقد التقدم." : locale === "tr" ? "PDF hâlâ işleniyor. Şimdi ayrılırsanız ilerleme kaybolacak." : "The PDF is still being processed. If you leave now, progress will be lost."}
+          title={t("upload.leave_title", locale)}
+          message={t("upload.leave_body", locale)}
           onDismiss={() => setShowLeaveModal(false)}
           actions={[
             {
-              label: locale === "de" ? "Trotzdem verlassen" : locale === "ar" ? "المغادرة على أي حال" : locale === "tr" ? "Yine de ayrıl" : "Leave anyway",
+              label: t("upload.leave_anyway", locale),
               variant: "danger",
               onClick: () => { setShowLeaveModal(false); router.push("/"); },
             },
             {
-              label: locale === "de" ? "Bleiben" : locale === "ar" ? "البقاء" : locale === "tr" ? "Kal" : "Stay",
+              label: t("upload.stay", locale),
               variant: "primary",
               onClick: () => setShowLeaveModal(false),
             },
@@ -316,9 +318,9 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
         />
       )}
       <main className="max-w-4xl mx-auto px-4 py-8">
-        <StepProgress currentStep={0} />
+        <StepProgress currentStep={0} locale={locale} />
         <div className="flex items-center justify-between mb-6">
-          <h1 className="text-2xl font-bold text-gray-900">{t("title", locale)}</h1>
+          <h1 className="text-2xl font-bold text-gray-900">{tu("title", locale)}</h1>
           {/* MODE 1 toggle — visible in idle */}
           {stage === "idle" && (
             <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
@@ -353,7 +355,7 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
             {error}
             {stage === "error" && (
               <button className="ml-3 underline" onClick={() => { setStage("idle"); setError(null); }}>
-                Try again
+                {t("upload.try_again", locale)}
               </button>
             )}
           </div>
@@ -366,20 +368,14 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
           <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-2xl flex flex-col sm:flex-row sm:items-center gap-3">
             <div className="flex-1 min-w-0">
               <p className="text-sm font-semibold text-blue-900">
-                {locale === "de" ? "Gespeichertes Formular fortsetzen" :
-                 locale === "ar" ? "متابعة النموذج المحفوظ" :
-                 locale === "tr" ? "Kaydedilen forma devam et" :
-                 "Continue saved form"}
+                {t("upload.continue_saved", locale)}
               </p>
               {currentFilename && (
                 <p className="text-xs text-blue-700 mt-0.5 truncate">{currentFilename}</p>
               )}
               {lastSavedAt && (
                 <p className="text-xs text-blue-500 mt-0.5">
-                  {locale === "de" ? "Gespeichert" :
-                   locale === "ar" ? "تم الحفظ" :
-                   locale === "tr" ? "Kaydedildi" :
-                   "Saved"}{" "}
+                  {t("saved.saved_at", locale)}{" "}
                   {new Date(lastSavedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                 </p>
               )}
@@ -388,10 +384,7 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
               onClick={() => router.push(`/${locale}/questions`)}
               className="flex-shrink-0 px-4 py-2 bg-blue-600 text-white text-sm font-semibold rounded-xl hover:bg-blue-700 transition-colors"
             >
-              {locale === "de" ? "Weiter" :
-               locale === "ar" ? "متابعة" :
-               locale === "tr" ? "Devam et" :
-               "Continue"} →
+              {t("upload.continue", locale)} →
             </button>
           </div>
         )}
@@ -406,10 +399,10 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
               <span className="text-3xl">📄</span>
               <div>
                 <p className="text-lg font-semibold text-gray-900 group-hover:text-brand-700">
-                  {locale === "de" ? "PDF hochladen" : locale === "ar" ? "رفع ملف PDF" : locale === "tr" ? "PDF yükle" : "Upload PDF"}
+                  {t("upload.upload_pdf", locale)}
                 </p>
                 <p className="text-sm text-gray-500 mt-1">
-                  {locale === "de" ? "Offizielles PDF-Formular von Ihrem Gerät hochladen." : locale === "ar" ? "ارفع نموذج PDF الرسمي من جهازك." : locale === "tr" ? "Cihazınızdan resmi PDF formu yükleyin." : "Upload an official PDF form from your device."}
+                  {t("upload.upload_pdf_desc", locale)}
                 </p>
               </div>
             </button>
@@ -427,29 +420,13 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
               <span className="text-3xl">📷</span>
               <div>
                 <p className="text-lg font-semibold text-gray-900 group-hover:text-amber-700">
-                  {locale === "de" ? "Dokument scannen" : locale === "ar" ? "مسح المستند" : locale === "tr" ? "Belge tara" : "Scan document"}
+                  {t("upload.scan_doc", locale)}
                 </p>
                 <p className="text-sm text-gray-500 mt-1">
-                  {locale === "de" ? "Papierformular mit der Kamera Seite für Seite scannen." : locale === "ar" ? "امسح نموذجًا ورقيًا بالكاميرا صفحةً بصفحة." : locale === "tr" ? "Kameranızla kağıt formu sayfa sayfa tarayın." : "Use your camera to scan a paper form page by page."}
+                  {t("upload.scan_desc", locale)}
                 </p>
                 <p className="text-xs text-amber-700 mt-2 font-medium">
-                  ⚠ {locale === "de"
-                      ? "Scan ist experimentell und funktioniert möglicherweise nicht auf allen Geräten."
-                      : locale === "ar"
-                      ? "المسح تجريبي وقد لا يعمل على جميع الأجهزة."
-                      : locale === "tr"
-                      ? "Tarama deneyseldir ve tüm cihazlarda çalışmayabilir."
-                      : locale === "fr"
-                      ? "Le scan est expérimental et peut ne pas fonctionner sur tous les appareils."
-                      : locale === "es"
-                      ? "El escaneo es experimental y puede no funcionar en todos los dispositivos."
-                      : locale === "sq"
-                      ? "Skanimi është eksperimental dhe mund të mos funksionojë në të gjitha pajisjet."
-                      : locale === "ru"
-                      ? "Сканирование экспериментальное и может работать не на всех устройствах."
-                      : locale === "uk"
-                      ? "Сканування експериментальне і може працювати не на всіх пристроях."
-                      : "Scanning is experimental and may not work on all devices."}
+                  ⚠ {t("upload.scan_warning", locale)}
                 </p>
               </div>
             </button>
@@ -462,7 +439,7 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
               onClick={() => setInputMode("choose")}
               className="mb-4 text-sm text-gray-400 hover:text-gray-600 transition-colors"
             >
-              ← {locale === "de" ? "Zurück" : locale === "ar" ? "رجوع" : locale === "tr" ? "Geri" : "Back"}
+              ← {t("common.back", locale)}
             </button>
             <FileDropzone
               onFileSelected={handleFileSelected}
@@ -473,8 +450,8 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
                 setStage("error");
               }}
               isProcessing={false}
-              uploadLabel={t("instr", locale)}
-              supportedLabel={t("supported", locale)}
+              uploadLabel={tu("instr", locale)}
+              supportedLabel={tu("supported", locale)}
             />
           </>
         )}
@@ -482,8 +459,8 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
         {stage === "processing" && (
           <div className="text-center py-16">
             <div className="animate-spin text-4xl mb-4">🔍</div>
-            <p className="text-lg font-semibold text-brand-600 mb-2">{t("processing", locale)}</p>
-            <p className="text-sm text-gray-400">{t("proc_sub", locale)}</p>
+            <p className="text-lg font-semibold text-brand-600 mb-2">{tu("processing", locale)}</p>
+            <p className="text-sm text-gray-400">{tu("proc_sub", locale)}</p>
             {noAiMode && <p className="mt-2 text-xs font-mono text-orange-600">MODE 1: bypassing AI…</p>}
           </div>
         )}
@@ -531,7 +508,7 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
                     onClick={() => router.push(`/${locale}/questions`)}
                     className="flex-1 py-3 bg-brand-600 text-white rounded-xl font-semibold hover:bg-brand-700 transition-colors"
                   >
-                    Continue to Questions →
+                    {t("upload.continue_to_questions", locale)}
                   </button>
                   {!noAiMode && (
                     <button
@@ -553,7 +530,7 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
                     onClick={() => { setStage("idle"); setError(null); }}
                     className="px-4 py-3 border-2 border-gray-200 text-gray-600 rounded-xl text-sm hover:bg-gray-50 transition-colors"
                   >
-                    Upload different PDF
+                    {t("upload.upload_different", locale)}
                   </button>
                 </div>
               </div>
@@ -565,7 +542,7 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
                 <div className="flex gap-3 justify-center mt-4">
                   <button onClick={() => router.push(`/${locale}/questions`)}
                     className="px-6 py-3 bg-brand-600 text-white rounded-xl font-semibold hover:bg-brand-700">
-                    Continue →
+                    {t("upload.continue", locale)} →
                   </button>
                   {!noAiMode && (
                     <button onClick={handleRerunNoAi}

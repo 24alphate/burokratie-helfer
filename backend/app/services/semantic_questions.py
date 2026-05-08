@@ -849,3 +849,19 @@ def lookup_semantic(semantic_key: str, locale: str) -> Optional[dict[str, str]]:
     if not entry:
         return None
     return entry.get(locale) or entry.get("en")
+
+
+def lookup_semantic_strict(semantic_key: str, locale: str) -> Optional[dict[str, str]]:
+    """
+    Strict variant: returns None if the requested locale is not present in
+    the semantic entry. Used to detect locale gaps for the quality report.
+    """
+    entry = SEMANTIC_QUESTIONS.get(semantic_key)
+    if not entry:
+        return None
+    return entry.get(locale)
+
+
+def get_all_semantic_locales(semantic_key: str) -> dict[str, dict[str, str]]:
+    """Return the full {locale: {...}} mapping for a semantic key, or {}."""
+    return SEMANTIC_QUESTIONS.get(semantic_key) or {}

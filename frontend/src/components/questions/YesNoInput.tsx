@@ -1,11 +1,6 @@
 "use client";
 
-const YES_LABELS: Record<string, string> = {
-  en: "Yes", ar: "نعم", tr: "Evet", de: "Ja", fa: "بله", ru: "Да", uk: "Так",
-};
-const NO_LABELS: Record<string, string> = {
-  en: "No", ar: "لا", tr: "Hayır", de: "Nein", fa: "خیر", ru: "Нет", uk: "Ні",
-};
+import { t } from "@/lib/i18n";
 
 interface YesNoInputProps {
   locale: string;
@@ -14,8 +9,8 @@ interface YesNoInputProps {
 }
 
 export function YesNoInput({ locale, onSubmit, isLoading }: YesNoInputProps) {
-  const yesLabel = YES_LABELS[locale] ?? "Yes";
-  const noLabel = NO_LABELS[locale] ?? "No";
+  const yesLabel = t("yn.yes", locale);
+  const noLabel = t("yn.no", locale);
 
   return (
     <div className="flex gap-4">

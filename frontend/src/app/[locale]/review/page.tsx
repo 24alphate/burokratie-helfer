@@ -9,37 +9,7 @@ import { useCaseStore } from "@/store/caseStore";
 import { api } from "@/lib/api";
 import { resolveQuestionText } from "@/lib/labelUtils";
 import { OutputGuarantee } from "@/components/questions/OutputGuarantee";
-
-const T: Record<string, Record<string, string>> = {
-  title:         { en: "Review your answers", ar: "راجع إجاباتك", tr: "Cevaplarınızı inceleyin", de: "Antworten überprüfen" },
-  instr:         { en: "Check everything before generating the PDF.", ar: "تحقق من كل شيء قبل إنشاء PDF.", tr: "PDF'yi oluşturmadan önce kontrol edin.", de: "Alles prüfen, bevor das PDF erstellt wird." },
-  generate:      { en: "Generate & Download PDF", ar: "إنشاء وتنزيل PDF", tr: "PDF Oluştur ve İndir", de: "PDF erstellen & herunterladen" },
-  edit:          { en: "← Edit answers", ar: "← تعديل الإجابات", tr: "← Yanıtları düzenle", de: "← Antworten bearbeiten" },
-  generating:    { en: "Generating PDF…", ar: "جارٍ إنشاء PDF…", tr: "PDF oluşturuluyor…", de: "PDF wird erstellt…" },
-  no_token:      { en: "PDF session expired. Please re-upload your document.", ar: "انتهت الجلسة. يرجى رفع المستند مرة أخرى.", tr: "Oturum süresi doldu. Lütfen belgeyi tekrar yükleyin.", de: "Sitzung abgelaufen. Bitte Dokument erneut hochladen." },
-  start_new:     { en: "Start a new form", ar: "ابدأ استمارة جديدة", tr: "Yeni form başlat", de: "Neues Formular starten" },
-  manual_fields: { en: "Must be filled in manually after printing:", ar: "يجب ملؤها يدويًا بعد الطباعة:", tr: "Yazdırdıktan sonra manuel doldurulmalı:", de: "Nach dem Drucken manuell ausfüllen:" },
-  no_answers:    { en: "Please answer the questions first.", ar: "يرجى الإجابة على الأسئلة أولاً.", tr: "Lütfen önce soruları yanıtlayın.", de: "Bitte beantworten Sie zuerst die Fragen.", fr: "Veuillez d'abord répondre aux questions.", es: "Por favor, responda primero las preguntas.", sq: "Ju lutemi përgjigjuni pyetjeve së pari.", ru: "Пожалуйста, сначала ответьте на вопросы.", uk: "Будь ласка, спочатку дайте відповіді на питання." },
-  save_btn:      { en: "Save for later", ar: "حفظ لوقت لاحق", tr: "Sonra devam et", de: "Speichern" },
-  saved_msg:     { en: "Saved on this device.", ar: "تم الحفظ على هذا الجهاز.", tr: "Bu cihaza kaydedildi.", de: "Auf diesem Gerät gespeichert." },
-  saved_warn:    { en: "Only saved locally — do not use on a shared computer.", ar: "محفوظ محليًا فقط.", tr: "Yalnızca yerel olarak kaydedildi.", de: "Nur lokal gespeichert — nicht auf einem gemeinsam genutzten Computer verwenden." },
-  new_doc_btn:   { en: "New document", ar: "مستند جديد", tr: "Yeni belge", de: "Neues Dokument" },
-  modal_title:   { en: "Start a new document?", ar: "بدء مستند جديد؟", tr: "Yeni bir belge?", de: "Neues Dokument starten?" },
-  modal_msg:     { en: "Your current answers will be lost. Click \"Save for later\" first if you want to return to this form.", ar: "ستُفقد إجاباتك الحالية. انقر على «حفظ» أولاً إذا كنت تريد العودة.", tr: "Mevcut yanitlariniz kaybolacak. Once \"Kaydet\" dugmesine tiklayin.", de: "Ihre aktuellen Antworten gehen verloren. Speichern Sie zuerst, wenn Sie spaeter zurueckkehren moechten." },
-  save_first:    { en: "Save first, then start new", ar: "احفظ أولاً ثم ابدأ", tr: "Önce kaydet, sonra başla", de: "Erst speichern, dann neu" },
-  start_new_btn: { en: "Start new (don't save)", ar: "ابدأ جديداً (بدون حفظ)", tr: "Kaydetmeden başla", de: "Neu starten (nicht speichern)" },
-  cancel:        { en: "Cancel", ar: "إلغاء", tr: "İptal", de: "Abbrechen" },
-  disclaimer:    {
-    en: "⚠️ This is a form completion tool only. We provide no legal advice. Please verify all information before submitting.",
-    ar: "⚠️ هذه أداة لمساعدتك في تعبئة الاستمارات فقط. لا نقدم أي استشارات قانونية.",
-    tr: "⚠️ Bu yalnızca bir form doldurma aracıdır. Hukuki tavsiye vermiyoruz.",
-    de: "⚠️ Dies ist nur eine Formular-Ausfüllhilfe. Wir geben keine Rechtsberatung.",
-  },
-};
-
-function t(key: string, locale: string) {
-  return T[key]?.[locale] ?? T[key]?.["en"] ?? key;
-}
+import { t } from "@/lib/i18n";
 
 export default function ReviewPage({ params }: { params: { locale: string } }) {
   const { locale } = params;
@@ -86,7 +56,7 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
 
   function handleSave() {
     markSaved();
-    setSaveMsg(`${t("saved_msg", locale)} ${t("saved_warn", locale)}`);
+    setSaveMsg(`${t("q.saved_msg", locale)} ${t("q.saved_warn", locale)}`);
   }
 
   function handleStartNew() {
@@ -96,11 +66,11 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
 
   async function handleGenerate() {
     if (!pdfToken) {
-      setError(t("no_token", locale));
+      setError(t("review.no_token", locale));
       return;
     }
     if (Object.keys(safeAnswers).length === 0) {
-      setError(t("no_answers", locale));
+      setError(t("review.no_answers", locale));
       return;
     }
     setGenerating(true);
@@ -126,8 +96,6 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
       URL.revokeObjectURL(url);
       setDone(true);
     } catch (e: unknown) {
-      // Always render a localized, plain-language message.
-      // Never expose backend deployment / API URL / status codes to the user.
       const { friendlyError } = await import("@/lib/errors");
       setError(friendlyError(e, locale));
     } finally {
@@ -136,55 +104,29 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
   }
 
   if (done) {
-    // iOS detection: Safari/Chrome/Firefox on iPhone or iPad all share the
-    // "files saved via Share → Save to Files" pattern. Includes iPadOS 13+
-    // which reports macOS userAgent — check touch points as a tie-breaker.
     const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
     const maxTouch = typeof navigator !== "undefined" ? (navigator as Navigator & { maxTouchPoints?: number }).maxTouchPoints ?? 0 : 0;
     const isIOS =
       /iPhone|iPad|iPod/i.test(ua) ||
       (/Macintosh/i.test(ua) && maxTouch > 1);
-    const IOS_TITLE: Record<string, string> = {
-      en: "On iPhone or iPad",
-      de: "Auf iPhone oder iPad",
-      fr: "Sur iPhone ou iPad",
-      ar: "على iPhone أو iPad",
-      tr: "iPhone veya iPad'de",
-      sq: "Në iPhone ose iPad",
-      es: "En iPhone o iPad",
-      fa: "روی iPhone یا iPad",
-      ru: "На iPhone или iPad",
-      uk: "На iPhone або iPad",
-    };
-    const IOS_BODY: Record<string, string> = {
-      en: "Tap the Share button, then choose Save to Files to keep your completed PDF on this device.",
-      de: "Tippen Sie auf das Teilen-Symbol und wählen Sie In Dateien sichern, um Ihre PDF auf diesem Gerät zu speichern.",
-      fr: "Appuyez sur le bouton Partager, puis choisissez Enregistrer dans Fichiers pour conserver le PDF sur cet appareil.",
-      ar: "اضغط على زر المشاركة، ثم اختر حفظ في الملفات للاحتفاظ بملف PDF على هذا الجهاز.",
-      tr: "Paylaş düğmesine dokunun, sonra Dosyalar'a Kaydet seçeneğini seçin.",
-      sq: "Prekni butonin Ndaj, pastaj zgjidhni Ruaj në Skedarë për të mbajtur PDF-në në këtë pajisje.",
-      es: "Toque el botón Compartir y luego elija Guardar en Archivos para conservar el PDF en este dispositivo.",
-      fa: "روی دکمه اشتراک‌گذاری ضربه بزنید، سپس Save to Files را انتخاب کنید.",
-      ru: "Нажмите кнопку Поделиться, затем выберите Сохранить в Файлы.",
-      uk: "Натисніть кнопку Поділитися, потім виберіть Зберегти у Файли.",
-    };
+
     return (
       <>
-        <Header />
+        <Header locale={locale} />
         <main className="max-w-2xl mx-auto px-4 py-8">
-          <StepProgress currentStep={3} />
+          <StepProgress currentStep={3} locale={locale} />
           <div className="text-center py-8">
             <div className="text-6xl mb-4">✅</div>
             <p className="text-xl font-semibold text-gray-800 mb-2">
-              {locale === "ar" ? "تم تنزيل PDF!" : locale === "tr" ? "PDF indirildi!" : locale === "de" ? "PDF heruntergeladen!" : "PDF downloaded!"}
+              {t("review.pdf_downloaded", locale)}
             </p>
             {fillStrategy === "fitz_overlay" && (
               <p className="text-xs font-mono text-green-600 mb-2">
-                ✅ Written directly onto the original form layout
+                {t("review.fitz_overlay_note", locale)}
               </p>
             )}
             <p className="text-gray-500 text-sm mb-6">
-              {locale === "de" ? "Bitte beim Jobcenter einreichen." : "Please submit it to the Jobcenter."}
+              {t("review.submit_to_office", locale)}
             </p>
           </div>
 
@@ -196,10 +138,10 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
               <span className="text-2xl leading-none mt-0.5" aria-hidden>📲</span>
               <div className="flex-1 min-w-0">
                 <p className="text-blue-900 font-semibold text-sm mb-1">
-                  {IOS_TITLE[locale] ?? IOS_TITLE.en}
+                  {t("review.ios_title", locale)}
                 </p>
                 <p className="text-blue-800 text-sm leading-relaxed">
-                  {IOS_BODY[locale] ?? IOS_BODY.en}
+                  {t("review.ios_body", locale)}
                 </p>
               </div>
             </div>
@@ -208,7 +150,7 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
           {notFillable.length > 0 && (
             <div className="mb-6 p-4 bg-amber-50 border border-amber-300 rounded-xl">
               <p className="text-amber-800 text-sm font-semibold mb-2">
-                ⚠ {t("manual_fields", locale)}
+                ⚠ {t("review.manual_fields", locale)}
               </p>
               <ul className="list-disc list-inside space-y-1">
                 {notFillable.map((label) => (
@@ -222,11 +164,11 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
             onClick={() => { reset(); router.push("/"); }}
             className="w-full py-3 border-2 border-gray-200 text-gray-600 rounded-xl font-medium hover:bg-gray-50 transition-colors"
           >
-            {t("start_new", locale)}
+            {t("review.start_new", locale)}
           </button>
 
           <div className="mt-6 p-4 bg-amber-50 border border-amber-200 rounded-xl">
-            <p className="text-amber-800 text-sm leading-relaxed">{t("disclaimer", locale)}</p>
+            <p className="text-amber-800 text-sm leading-relaxed">{t("review.disclaimer", locale)}</p>
           </div>
         </main>
       </>
@@ -235,9 +177,9 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
 
   return (
     <>
-      <Header />
+      <Header locale={locale} />
       <main className="max-w-2xl mx-auto px-4 py-8">
-        <StepProgress currentStep={2} />
+        <StepProgress currentStep={2} locale={locale} />
 
         {/* Action bar */}
         <div className="flex items-center justify-between gap-3 mb-5">
@@ -245,13 +187,13 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
             onClick={() => setShowNewDocModal(true)}
             className="text-sm text-gray-500 hover:text-gray-800 font-medium transition-colors"
           >
-            ← {t("new_doc_btn", locale)}
+            ← {t("q.new_doc_btn", locale)}
           </button>
           <button
             onClick={handleSave}
             className="px-4 py-2 bg-green-600 text-white text-sm font-semibold rounded-xl hover:bg-green-700 transition-colors"
           >
-            {t("save_btn", locale)}
+            {t("q.save_btn", locale)}
           </button>
         </div>
 
@@ -261,8 +203,8 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
           </div>
         )}
 
-        <h1 className="text-2xl font-bold text-gray-900 mb-2">{t("title", locale)}</h1>
-        <p className="text-gray-500 mb-6">{t("instr", locale)}</p>
+        <h1 className="text-2xl font-bold text-gray-900 mb-2">{t("review.title", locale)}</h1>
+        <p className="text-gray-500 mb-6">{t("review.instr", locale)}</p>
 
         {error && (
           <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-xl text-red-700 text-sm">
@@ -272,12 +214,12 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
 
         {!pdfToken && (
           <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-700 text-sm">
-            {t("no_token", locale)}
+            {t("review.no_token", locale)}
             <button
               onClick={() => router.push(`/${locale}/upload`)}
               className="ml-3 underline font-medium"
             >
-              Re-upload
+              {t("review.reupload", locale)}
             </button>
           </div>
         )}
@@ -285,7 +227,7 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
         {/* Answer list */}
         <div className="space-y-3 mb-8">
           {answeredList.length === 0 ? (
-            <p className="text-gray-400 text-center py-8">No answers yet.</p>
+            <p className="text-gray-400 text-center py-8">{t("review.no_answers_yet", locale)}</p>
           ) : (
             answeredList.map(({ key, label, origLabel, value, inputType }) => (
               <div key={key} className="flex justify-between gap-4 p-4 bg-white border border-gray-100 rounded-xl shadow-sm">
@@ -297,7 +239,9 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
                 </div>
                 <span className="text-gray-800 font-medium text-sm text-right break-words">
                   {inputType === "checkbox"
-                    ? (["yes","ja","true","1"].includes(String(value).toLowerCase()) ? "☑ Yes" : "☐ No")
+                    ? (["yes","ja","true","1"].includes(String(value).toLowerCase())
+                        ? `☑ ${t("yn.yes", locale)}`
+                        : `☐ ${t("yn.no", locale)}`)
                     : value}
                 </span>
               </div>
@@ -309,13 +253,7 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
         {unansweredFields.length > 0 && (
           <div className="mb-6 p-4 bg-amber-50 border border-amber-300 rounded-xl">
             <p className="text-amber-800 text-sm font-semibold mb-3">
-              {locale === "de"
-                ? `⚠ ${unansweredFields.length} Frage${unansweredFields.length !== 1 ? "n" : ""} noch nicht beantwortet`
-                : locale === "ar"
-                ? `⚠ ${unansweredFields.length} سؤال لم تتم الإجابة عنه بعد`
-                : locale === "tr"
-                ? `⚠ ${unansweredFields.length} soru henüz yanıtlanmadı`
-                : `⚠ ${unansweredFields.length} question${unansweredFields.length !== 1 ? "s" : ""} not answered yet`}
+              {t("review.unanswered_n", locale, { n: unansweredFields.length })}
             </p>
             <div className="space-y-2">
               {unansweredFields.map((f) => {
@@ -334,7 +272,7 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
                       onClick={() => router.push(`/${locale}/questions?focus=${f.key}`)}
                       className="flex-shrink-0 px-3 py-1.5 bg-amber-600 text-white text-xs rounded-lg font-medium hover:bg-amber-700 transition-colors"
                     >
-                      {locale === "de" ? "Antworten" : locale === "ar" ? "أجب" : locale === "tr" ? "Yanıtla" : "Answer"}
+                      {t("q.answer", locale)}
                     </button>
                   </div>
                 );
@@ -351,39 +289,39 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
             disabled={generating || !pdfToken || answeredList.length === 0}
             className="w-full py-4 bg-brand-600 text-white rounded-xl font-bold text-lg hover:bg-brand-700 disabled:opacity-50 transition-colors"
           >
-            {generating ? t("generating", locale) : t("generate", locale)}
+            {generating ? t("review.generating", locale) : t("review.generate", locale)}
           </button>
           <button
             onClick={() => router.push(`/${locale}/questions`)}
             className="w-full py-3 border-2 border-gray-200 text-gray-600 rounded-xl font-medium hover:bg-gray-50 transition-colors"
           >
-            {t("edit", locale)}
+            {t("review.edit", locale)}
           </button>
         </div>
 
         <div className="mt-6 p-4 bg-amber-50 border border-amber-200 rounded-xl">
-          <p className="text-amber-800 text-sm leading-relaxed">{t("disclaimer", locale)}</p>
+          <p className="text-amber-800 text-sm leading-relaxed">{t("review.disclaimer", locale)}</p>
         </div>
       </main>
 
       {showNewDocModal && (
         <ConfirmModal
-          title={t("modal_title", locale)}
-          message={t("modal_msg", locale)}
+          title={t("q.modal_title", locale)}
+          message={t("q.modal_msg", locale)}
           onDismiss={() => setShowNewDocModal(false)}
           actions={[
             {
-              label: t("save_first", locale),
+              label: t("q.save_first", locale),
               variant: "primary",
               onClick: () => { handleSave(); handleStartNew(); },
             },
             {
-              label: t("start_new_btn", locale),
+              label: t("q.start_new", locale),
               variant: "danger",
               onClick: handleStartNew,
             },
             {
-              label: t("cancel", locale),
+              label: t("common.cancel", locale),
               variant: "secondary",
               onClick: () => setShowNewDocModal(false),
             },

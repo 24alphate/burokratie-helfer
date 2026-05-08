@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import { useCaseStore } from "@/store/caseStore";
 import { ConfirmModal } from "@/components/layout/ConfirmModal";
 import { PrivacyNote } from "@/components/layout/PrivacyNote";
+import { t } from "@/lib/i18n";
 
 const LANGUAGES = [
   { code: "ar", label: "العربية", dir: "rtl" },
@@ -45,6 +46,13 @@ export default function LandingPage() {
   const hasSavedForm    = hasFields && !!pdfToken && tokenAge !== null && tokenAge < TOKEN_TTL_MS;
   const isExpiredForm   = hasFields && tokenAge !== null && tokenAge >= TOKEN_TTL_MS;
 
+  // The locale we use for the saved-form / expired card UI is the locale the
+  // user picked in the previous session (savedLocale), NOT the new selection
+  // since the user hasn't started a new flow yet. Modal copy uses the new
+  // selectedLocale because the modal is part of the new flow.
+  const cardLocale = savedLocale || "en";
+  const modalLocale = selectedLocale || cardLocale;
+
   // Question counts for the saved-form card
   const groundedFields  = extractedFieldIds.length > 0
     ? fields.filter(f => extractedFieldIds.includes(f.key))
@@ -72,7 +80,6 @@ export default function LandingPage() {
       setCaseId(newCase.id);
       router.push(`/${locale}/upload`);
     } catch (e: unknown) {
-      // Always render a localized, plain-language message.
       const { friendlyError } = await import("@/lib/errors");
       setError(friendlyError(e, locale));
     } finally {
@@ -108,7 +115,7 @@ export default function LandingPage() {
       <div className="w-full max-w-md">
         <div className="text-center mb-10">
           <h1 className="text-4xl font-bold text-brand-700 mb-2">Bürokratie-Helfer</h1>
-          <p className="text-gray-500 text-sm">Form assistance · مساعدة استمارات · Form yardımı</p>
+          <p className="text-gray-500 text-sm">{t("landing.tagline", cardLocale)}</p>
         </div>
 
         {/* ── Continue saved form card ─────────────────────────────────────── */}
@@ -118,39 +125,24 @@ export default function LandingPage() {
               <span className="text-2xl">📄</span>
               <div className="flex-1 min-w-0">
                 <p className="font-semibold text-blue-900 text-sm">
-                  {savedLocale === "de" ? "Gespeichertes Formular" :
-                   savedLocale === "ar" ? "نموذج محفوظ" :
-                   savedLocale === "tr" ? "Kaydedilmiş form" :
-                   "Saved form"}
+                  {t("saved.title", cardLocale)}
                 </p>
                 {currentFilename && (
                   <p className="text-xs text-blue-700 mt-0.5 truncate font-mono">{currentFilename}</p>
                 )}
                 {totalCount > 0 && (
                   <p className="text-xs text-blue-700 mt-1">
-                    {answeredCount} / {totalCount}{" "}
-                    {savedLocale === "de" ? "Fragen beantwortet" :
-                     savedLocale === "ar" ? "أسئلة تمت الإجابة عنها" :
-                     savedLocale === "tr" ? "soru yanıtlandı" :
-                     "questions answered"}
+                    {answeredCount} / {totalCount} {t("saved.questions_answered", cardLocale)}
                     {missingCount > 0 && (
                       <span className="text-amber-600 ml-2">
-                        · {missingCount}{" "}
-                        {savedLocale === "de" ? "fehlen" :
-                         savedLocale === "ar" ? "مفقودة" :
-                         savedLocale === "tr" ? "eksik" :
-                         "missing"}
+                        · {missingCount} {t("saved.missing", cardLocale)}
                       </span>
                     )}
                   </p>
                 )}
                 {lastSavedAt && (
                   <p className="text-xs text-blue-500 mt-0.5">
-                    {savedLocale === "de" ? "Gespeichert" :
-                     savedLocale === "ar" ? "تم الحفظ" :
-                     savedLocale === "tr" ? "Kaydedildi" :
-                     "Saved"}{" "}
-                    {formatSavedTime(lastSavedAt)}
+                    {t("saved.saved_at", cardLocale)} {formatSavedTime(lastSavedAt)}
                   </p>
                 )}
               </div>
@@ -161,27 +153,18 @@ export default function LandingPage() {
                 onClick={handleContinue}
                 className="w-full py-2.5 bg-blue-600 text-white text-sm font-semibold rounded-xl hover:bg-blue-700 transition-colors"
               >
-                {savedLocale === "de" ? "Weiter ausfüllen →" :
-                 savedLocale === "ar" ? "متابعة التعبئة ←" :
-                 savedLocale === "tr" ? "Doldurmaya devam et →" :
-                 "Continue filling in →"}
+                {t("saved.continue", cardLocale)}
               </button>
               <button
                 onClick={handleDeleteSaved}
                 className="w-full py-2 text-red-600 text-xs font-medium hover:text-red-800 transition-colors"
               >
-                {savedLocale === "de" ? "Gespeichertes Formular löschen" :
-                 savedLocale === "ar" ? "حذف النموذج المحفوظ" :
-                 savedLocale === "tr" ? "Kaydedilen formu sil" :
-                 "Delete saved form"}
+                {t("saved.delete", cardLocale)}
               </button>
             </div>
 
             <p className="text-xs text-blue-400 mt-3 text-center">
-              {savedLocale === "de" ? "Nur auf diesem Gerät/Browser gespeichert." :
-               savedLocale === "ar" ? "محفوظ فقط على هذا الجهاز/المتصفح." :
-               savedLocale === "tr" ? "Yalnızca bu cihaz/tarayıcıda kaydedildi." :
-               "Saved only on this device/browser."}
+              {t("saved.local_only", cardLocale)}
             </p>
           </div>
         )}
@@ -190,38 +173,23 @@ export default function LandingPage() {
         {mounted && isExpiredForm && (
           <div className="mb-6 bg-amber-50 border border-amber-300 rounded-2xl p-5">
             <p className="text-amber-900 text-sm font-semibold mb-1">
-              {savedLocale === "de" ? "Gespeichertes Formular abgelaufen" :
-               savedLocale === "ar" ? "انتهت صلاحية النموذج المحفوظ" :
-               savedLocale === "tr" ? "Kaydedilen form süresi doldu" :
-               "Saved form expired"}
+              {t("expired.title", cardLocale)}
             </p>
             <p className="text-amber-800 text-xs mb-4">
-              {savedLocale === "de"
-                ? "Aus Datenschutzgründen laufen gespeicherte Formulare nach 4 Stunden ab. Bitte laden Sie das PDF erneut hoch."
-                : savedLocale === "ar"
-                ? "لأسباب تتعلق بالخصوصية، تنتهي صلاحية النماذج المحفوظة بعد 4 ساعات. يرجى إعادة رفع ملف PDF."
-                : savedLocale === "tr"
-                ? "Gizlilik nedeniyle kaydedilen formlar 4 saat sonra sona erer. Lütfen PDF'yi tekrar yükleyin."
-                : "For privacy reasons, saved forms expire after 4 hours. Please re-upload the PDF."}
+              {t("expired.body", cardLocale)}
             </p>
             <div className="flex gap-2">
               <button
                 onClick={handleReupload}
                 className="flex-1 py-2 bg-amber-600 text-white text-sm font-semibold rounded-xl hover:bg-amber-700 transition-colors"
               >
-                {savedLocale === "de" ? "Erneut hochladen" :
-                 savedLocale === "ar" ? "إعادة الرفع" :
-                 savedLocale === "tr" ? "Tekrar yükle" :
-                 "Re-upload PDF"}
+                {t("expired.reupload", cardLocale)}
               </button>
               <button
                 onClick={handleDeleteSaved}
                 className="px-4 py-2 border-2 border-amber-300 text-amber-700 text-sm rounded-xl hover:bg-amber-100 transition-colors"
               >
-                {savedLocale === "de" ? "Löschen" :
-                 savedLocale === "ar" ? "حذف" :
-                 savedLocale === "tr" ? "Sil" :
-                 "Delete"}
+                {t("expired.delete", cardLocale)}
               </button>
             </div>
           </div>
@@ -230,7 +198,7 @@ export default function LandingPage() {
         {/* ── Language selection + Start ───────────────────────────────────── */}
         <div className="bg-white rounded-2xl shadow-md p-8">
           <p className="text-center text-gray-700 font-medium mb-6 text-lg">
-            Select your language / اختر لغتك / Dilinizi seçin
+            {t("landing.select_language", selectedLocale ?? "en")}
           </p>
 
           <div className="grid grid-cols-2 gap-3 mb-8">
@@ -259,18 +227,18 @@ export default function LandingPage() {
             disabled={!selectedLocale || loading}
             className="w-full py-3 px-6 bg-brand-600 text-white rounded-xl font-semibold text-lg hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            {loading ? "..." : "Start →"}
+            {loading ? "..." : t("landing.start", selectedLocale ?? "en")}
           </button>
         </div>
 
         <p className="text-center text-xs text-gray-400 mt-6 px-4">
-          This is a form completion tool. We provide no legal advice.
+          {t("landing.disclaimer", selectedLocale ?? cardLocale)}
         </p>
 
         {/* Phase E/E5 — honest, locale-aware privacy statement */}
         <div className="mt-3 px-4">
           <PrivacyNote
-            locale={selectedLocale ?? "en"}
+            locale={selectedLocale ?? cardLocale}
             className="text-center text-xs text-gray-500 leading-relaxed"
           />
         </div>
@@ -279,28 +247,12 @@ export default function LandingPage() {
       {/* Start-new confirmation when a saved form exists */}
       {showStartNewConfirm && (
         <ConfirmModal
-          title={
-            selectedLocale === "de" ? "Neues Formular starten?" :
-            selectedLocale === "ar" ? "بدء نموذج جديد؟" :
-            selectedLocale === "tr" ? "Yeni form başlatılsın mı?" :
-            "Start a new form?"
-          }
-          message={
-            selectedLocale === "de"
-              ? "Ein neues Formular zu starten löscht das gespeicherte Formular auf diesem Gerät."
-              : selectedLocale === "ar"
-              ? "سيؤدي بدء نموذج جديد إلى حذف النموذج المحفوظ على هذا الجهاز."
-              : selectedLocale === "tr"
-              ? "Yeni bir form başlatmak bu cihazdaki kaydedilmiş formu silecek."
-              : "Starting a new form will delete the saved form on this device."
-          }
+          title={t("modal.start_new.title", modalLocale)}
+          message={t("modal.start_new.body", modalLocale)}
           onDismiss={() => setShowStartNewConfirm(false)}
           actions={[
             {
-              label: selectedLocale === "de" ? "Ja, neu starten" :
-                     selectedLocale === "ar" ? "نعم، ابدأ من جديد" :
-                     selectedLocale === "tr" ? "Evet, yeniden başlat" :
-                     "Yes, start new",
+              label: t("modal.start_new.confirm", modalLocale),
               variant: "danger",
               onClick: async () => {
                 setShowStartNewConfirm(false);
@@ -308,10 +260,7 @@ export default function LandingPage() {
               },
             },
             {
-              label: selectedLocale === "de" ? "Abbrechen" :
-                     selectedLocale === "ar" ? "إلغاء" :
-                     selectedLocale === "tr" ? "İptal" :
-                     "Cancel",
+              label: t("common.cancel", modalLocale),
               variant: "secondary",
               onClick: () => setShowStartNewConfirm(false),
             },

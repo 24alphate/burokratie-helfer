@@ -975,19 +975,44 @@ def field_map_to_defs(
         tr_example = tr.get("example", "")
         tr_format  = tr.get("format", "")
 
-        # Always include fallback language keys so frontend has safe alternatives.
+        # ── Populate all Tier-A locales in question dict ────────────────────
+        # The frontend uses field.question[selected_locale] as the primary
+        # source of truth. To make Level 1 language switches instant (no
+        # reprocessing) we pre-fill every Tier-A locale here using the same
+        # priority chain as the user's locale: verified > semantic > deterministic.
+        # Anything missing falls through to the user's resolved text and finally
+        # the original German label (never English silently for Tier-A).
+        TIER_A = ("en", "de", "fr", "ar", "tr", "sq")
         question_dict: dict[str, str] = {user_language: raw_question}
-        if document_language != user_language:
+
+        from app.services.question_translator import get_deterministic_translation
+        from app.services.verified_questions import lookup_verified_strict as _lv_strict
+        from app.services.semantic_questions import lookup_semantic_strict as _ls_strict
+
+        for loc in TIER_A:
+            if loc in question_dict and question_dict[loc]:
+                continue
+            # Priority 1: verified
+            vq = _lv_strict(entry.field_id, entry.original_label, loc)
+            if vq and vq.get("question"):
+                question_dict[loc] = vq["question"]
+                continue
+            # Priority 2: semantic
+            if entry.semantic_key:
+                sem = _ls_strict(entry.semantic_key, loc)
+                if sem and sem.get("question"):
+                    question_dict[loc] = sem["question"]
+                    continue
+            # Priority 3: deterministic
+            det = get_deterministic_translation(entry.original_label, loc)
+            if det:
+                question_dict[loc] = det
+                continue
+
+        # Document-language fallback (raw label) so the original PDF wording
+        # remains visible as secondary text on the review page.
+        if document_language not in question_dict:
             question_dict[document_language] = entry.original_label
-        if user_language != "en" and document_language != "en":
-            from app.services.question_translator import get_deterministic_translation
-            from app.services.verified_questions import lookup_verified as _lv
-            vq_en = _lv(entry.field_id, entry.original_label, "en")
-            question_dict["en"] = (
-                (vq_en or {}).get("question")
-                or get_deterministic_translation(entry.original_label, "en")
-                or entry.original_label
-            )
 
         # ── Guidance injection ──────────────────────────────────────────────────
         # If the field has no template guidance, inject guidance from the

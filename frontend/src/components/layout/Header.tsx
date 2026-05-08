@@ -2,15 +2,19 @@
 
 import { useRouter } from "next/navigation";
 import { useCaseStore } from "@/store/caseStore";
+import { t } from "@/lib/i18n";
 
 interface HeaderProps {
   /** Override the logo click. When omitted the logo saves progress and goes home. */
   onLogoClick?: () => void;
+  /** Locale for the header tagline. Falls back to the persisted locale or "en". */
+  locale?: string;
 }
 
-export function Header({ onLogoClick }: HeaderProps = {}) {
+export function Header({ onLogoClick, locale }: HeaderProps = {}) {
   const router = useRouter();
-  const { markSaved } = useCaseStore();
+  const { markSaved, locale: storeLocale } = useCaseStore();
+  const effectiveLocale = locale || storeLocale || "en";
 
   function handleLogoClick() {
     if (onLogoClick) {
@@ -30,7 +34,7 @@ export function Header({ onLogoClick }: HeaderProps = {}) {
         >
           Bürokratie-Helfer
         </button>
-        <span className="text-xs text-gray-400">Form assistance · No legal advice</span>
+        <span className="text-xs text-gray-400">{t("header.tagline", effectiveLocale)}</span>
       </div>
     </header>
   );
