@@ -205,6 +205,7 @@ _EXTRACTION_SOURCE_TO_LEVEL = {
     "verified_template": 1,
     "acroform":          2,
     "pdfplumber":        3,
+    "ocr":               3,   # Stage 4B promotion: scanned + OCR-derived fields → Level 3
     "auto":              4,
 }
 

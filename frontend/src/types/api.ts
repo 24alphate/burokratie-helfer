@@ -86,7 +86,7 @@ export interface AnalysisReport {
   grounding_ok: boolean;             // always true
   // Template metadata
   template_id: string | null;        // set when a verified template matched
-  extraction_source: string;         // "verified_template" | "acroform" | "pdfplumber" | "auto"
+  extraction_source: string;         // "verified_template" | "acroform" | "pdfplumber" | "ocr" | "auto"
   support_level: number;             // 1=verified | 2=acroform | 3=flat | 4=scanned/unknown
   // Phase D/D2 — AcroForm-specific metrics. Present on every extraction
   // (zeroed for Level 1). Mirrors AnalysisReport.acroform_metrics on the backend.
@@ -109,10 +109,13 @@ export interface AnalysisReport {
   // Phase D/D2 — fill strategy advertisement.
   // "fitz_overlay" | "acroform" | "summary" | null (extraction-only call)
   fill_strategy?: string | null;
-  // Stage 4A — Level 4 OCR diagnostic. Present only when support_level === 4.
-  // The frontend Level-4 unsupported screen reads diagnostic_status to pick
-  // the right user-facing copy. `technical_message` is intentionally NOT
-  // included here — it lives only in backend logs.
+  // Stage 4A/4B — OCR diagnostic.
+  //   • Stage 4A: support_level === 4 AND fields = []. The Level-4 unsupported
+  //     screen reads diagnostic_status to pick the right user-facing copy.
+  //   • Stage 4B: support_level === 3 AND extraction_source === "ocr" AND
+  //     fields populated. The diagnostic is attached for transparency so the
+  //     UI can show "questions came from OCR — please verify" copy.
+  // `technical_message` is intentionally NOT included — backend logs only.
   ocr_diagnostic?: {
     provider: string;            // "tesseract" | "unavailable"
     page_count: number;

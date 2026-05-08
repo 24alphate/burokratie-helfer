@@ -666,6 +666,24 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
           templateName={templateId}
         />
 
+        {/* Stage 4B — OCR-promoted scan: questions came from OCR text */}
+        {ocrDiagnostic && supportLevel === 3 && safeFields.length > 0 && (
+          <div
+            data-testid="ocr-promotion-note"
+            className="mb-4 px-4 py-3 bg-blue-50 border border-blue-200 rounded-xl flex items-start gap-3"
+          >
+            <span className="text-xl leading-none mt-0.5" aria-hidden>📷</span>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-blue-900">
+                {ti18n("ocr.promotion_title", locale)}
+              </p>
+              <p className="text-xs text-blue-800 mt-0.5">
+                {ti18n("ocr.promotion_body", locale)}
+              </p>
+            </div>
+          </div>
+        )}
+
         <ReviewWarning
           supportLevel={supportLevel}
           fields={safeFields}

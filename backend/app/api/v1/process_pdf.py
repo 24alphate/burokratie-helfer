@@ -232,13 +232,24 @@ async def process_pdf(
         extraction.pdf_type, extraction.total_pages, len(extraction.fields), extracted_ids[:10],
     )
 
-    # Stage 4A — when the router returns Level 4 (scanned/photo) we
-    # short-circuit into the OCR diagnostic-only path. Result: 200 OK with
-    # `fields=[]`, `extracted_field_ids=[]`, and `ocr_diagnostic` populated.
-    # NO question generation, NO PDF fill, NO LLM. The frontend Level-4
-    # screen renders user-friendly copy from `ocr_diagnostic.diagnostic_status`.
+    # Stage 4A — when the router returns Level 4 (scanned/photo) we run
+    # the OCR diagnostic. Two outcomes:
+    #
+    #   (a) Stage 4B promotion: diagnostic_status == "readable" AND OCR text
+    #       yields ≥1 FieldMapEntry via text_to_fields. We REPLACE the
+    #       extraction result with the OCR-derived fields, downgrade the
+    #       support_level to 3 (best-effort extraction), and let the rest of
+    #       the pipeline (translate + quality + grounding) run unchanged.
+    #       The original ocr_diagnostic is still attached to AnalysisReport
+    #       for transparency.
+    #
+    #   (b) Stage 4A short-circuit: any other status (low_confidence,
+    #       no_text_found, ocr_unavailable, failed) OR readable but zero
+    #       fields extracted. Same diagnostic-only response as before.
+    ocr_diag_for_report: dict | None = None
     if extraction.support_level == 4:
         from app.services.ocr.tesseract_provider import get_default_provider
+        from app.services.ocr.text_to_fields import extract_fields_from_ocr
         ocr_provider = get_default_provider()
         ocr_diag = ocr_provider.diagnose(content)
         log.info(
@@ -249,22 +260,43 @@ async def process_pdf(
             ocr_diag.page_count, ocr_diag.readable_pages, ocr_diag.page_count,
             ocr_diag.technical_message,
         )
-        # Normalize to Pydantic-friendly dict shape for AnalysisReport
         from dataclasses import asdict
         ocr_diag_dict = asdict(ocr_diag)
-        # Strip the technical_message for ANY user-facing serialization
-        # (Pydantic will pass it through; we explicitly drop it before the
-        # JSON response leaves the API layer below.)
-        return _build_scanned_response(
-            content=content,
-            extraction=extraction,
-            ocr_diag_dict=ocr_diag_dict,
-            user_language=user_language,
-            document_language=document_language,
-            filename=filename,
-            ai_was_used=False,
-            no_ai_mode=no_ai,
-        )
+
+        # Stage 4B — try OCR-text-to-fields when the scan is readable.
+        ocr_fields = extract_fields_from_ocr(ocr_diag)
+        if ocr_fields:
+            log.info(
+                "process-pdf OCR_PROMOTION level=4→3 ocr_fields=%d",
+                len(ocr_fields),
+            )
+            # Promote: replace the empty extraction with OCR-derived fields
+            # and let the normal pipeline run. The ocr_diagnostic is kept
+            # in the report so the user knows OCR was used.
+            from app.services.pdf_pipeline import ExtractionResult
+            extraction = ExtractionResult(
+                pdf_type="ocr",
+                fields=ocr_fields,
+                total_pages=ocr_diag.page_count,
+                template_id=None,
+                extraction_source="ocr",
+                support_level=3,
+            )
+            extracted_ids = [e.field_id for e in extraction.fields]
+            ocr_diag_for_report = ocr_diag_dict
+            # Fall through to the normal extraction path below.
+        else:
+            # Stage 4A short-circuit — diagnostic only.
+            return _build_scanned_response(
+                content=content,
+                extraction=extraction,
+                ocr_diag_dict=ocr_diag_dict,
+                user_language=user_language,
+                document_language=document_language,
+                filename=filename,
+                ai_was_used=False,
+                no_ai_mode=no_ai,
+            )
 
     if not extraction.fields:
         detail = {
@@ -602,6 +634,14 @@ async def process_pdf(
         len(locale_quality["missing_questions"]),
     )
 
+    # Stage 4B — when this run came from an OCR-promoted scan, strip the
+    # technical_message from the diagnostic before serializing it. The
+    # diagnostic stays attached so the frontend can show "we used OCR".
+    safe_ocr_for_promotion: dict | None = None
+    if ocr_diag_for_report is not None:
+        safe_ocr_for_promotion = dict(ocr_diag_for_report)
+        safe_ocr_for_promotion.pop("technical_message", None)
+
     analysis = AnalysisReport(
         pdf_type=pipeline_report.pdf_type,
         total_pages=pipeline_report.total_pages,
@@ -625,6 +665,7 @@ async def process_pdf(
         acroform_metrics=acroform_metrics,
         fill_strategy=fill_strategy,
         locale_quality_report=locale_quality,
+        ocr_diagnostic=safe_ocr_for_promotion,
     )
 
     shown = shown_defs

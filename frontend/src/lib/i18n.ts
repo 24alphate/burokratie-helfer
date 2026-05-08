@@ -281,6 +281,17 @@ const STRINGS: Record<string, Dict> = {
   "yn.yes":                     { en: "Yes", de: "Ja", fr: "Oui", ar: "نعم", tr: "Evet", sq: "Po" },
   "yn.no":                      { en: "No", de: "Nein", fr: "Non", ar: "لا", tr: "Hayır", sq: "Jo" },
 
+  // ── OCR-promotion banner (Stage 4B) ─────────────────────────────────────
+  "ocr.promotion_title":        { en: "These questions came from your scan", de: "Diese Fragen stammen aus Ihrem Scan", fr: "Ces questions proviennent de votre scan", ar: "هذه الأسئلة جاءت من المسح الضوئي", tr: "Bu sorular taramanızdan geldi", sq: "Këto pyetje vijnë nga skanimi juaj" },
+  "ocr.promotion_body":         {
+    en: "We read text from your scanned image. Some questions may be unclear — please verify each answer carefully before generating the PDF.",
+    de: "Wir haben Text aus Ihrem gescannten Bild gelesen. Manche Fragen können unklar sein — bitte prüfen Sie jede Antwort sorgfältig.",
+    fr: "Nous avons lu le texte de votre image scannée. Certaines questions peuvent être peu claires — vérifiez chaque réponse attentivement.",
+    ar: "قرأنا النص من صورتك الممسوحة. قد تكون بعض الأسئلة غير واضحة — يرجى التحقق من كل إجابة بعناية.",
+    tr: "Taranmış görüntünüzdeki metni okuduk. Bazı sorular belirsiz olabilir — lütfen her yanıtı dikkatlice doğrulayın.",
+    sq: "Ne kemi lexuar tekstin nga imazhi juaj i skanuar. Disa pyetje mund të jenë të paqarta — verifikoni me kujdes çdo përgjigje.",
+  },
+
   // ── Guidance panel ──────────────────────────────────────────────────────
   "guidance.toggle":            { en: "Need help understanding this?", de: "Erklärung anzeigen?", fr: "Besoin d'aide pour comprendre ?", ar: "هل تحتاج مساعدة في فهم هذا؟", tr: "Bu soruyu anlamak için yardım ister misiniz?", sq: "Keni nevojë për ndihmë me këtë?" },
   "guidance.hide":              { en: "Hide explanation", de: "Erklärung ausblenden", fr: "Masquer l'explication", ar: "إخفاء الشرح", tr: "Açıklamayı gizle", sq: "Fshih shpjegimin" },
