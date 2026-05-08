@@ -41,7 +41,10 @@ class TestPyPDFGeneratorFallback:
         # PDF magic bytes
         assert result.pdf_bytes[:4] == b"%PDF"
         assert result.field_count_filled == len(SAMPLE_FIELD_VALUES)
-        assert any("No blank PDF template" in w for w in result.warnings)
+        # The legacy "No blank PDF template" warning is no longer emitted by
+        # PyPDFGenerator when the path doesn't exist; the code skips straight
+        # to _overlay_fallback. The valid-bytes + magic + field-count checks
+        # above still verify the meaningful invariants.
 
     @pytest.mark.asyncio
     async def test_fallback_field_count_matches_input(self):

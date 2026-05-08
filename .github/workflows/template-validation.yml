@@ -1,0 +1,68 @@
+name: Template Validation
+
+# Runs whenever a PR or push touches verified-template files. Enforces the
+# Level 1 contract from sections 3-4 of the implementation plan:
+#   - validate_template() returns no errors
+#   - All template_registry tests pass
+#   - All verified_questions tests pass
+#   - The /api/v1/templates/verified endpoint exposes the catalog correctly
+#
+# This workflow is the gate that prevents accuracy regression as the catalog
+# grows from 1 → 200+ templates. A red check here = template cannot merge.
+
+on:
+  pull_request:
+    paths:
+      - "burokratie-helfer/backend/app/services/form_templates/**"
+      - "burokratie-helfer/backend/app/services/verified_questions.py"
+      - "burokratie-helfer/backend/tests/test_template_registry.py"
+      - "burokratie-helfer/backend/tests/test_verified_questions.py"
+      - "burokratie-helfer/backend/tests/test_templates_endpoint.py"
+      - "burokratie-helfer/templates_source/**"
+      - "burokratie-helfer/tools/template_author/**"
+      - ".github/workflows/template-validation.yml"
+  push:
+    branches: [main]
+    paths:
+      - "burokratie-helfer/backend/app/services/form_templates/**"
+      - "burokratie-helfer/backend/app/services/verified_questions.py"
+
+jobs:
+  validate-templates:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: burokratie-helfer/backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: burokratie-helfer/backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run validate_template() on every registered template
+        working-directory: burokratie-helfer
+        run: python -m tools.template_author validate --all
+
+      - name: List registered templates with locale coverage
+        working-directory: burokratie-helfer
+        run: python -m tools.template_author list
+
+      - name: Run template registry tests
+        run: python -m pytest tests/test_template_registry.py -v
+
+      - name: Run verified-questions tests
+        run: python -m pytest tests/test_verified_questions.py -v
+
+      - name: Run /api/v1/templates/verified endpoint tests
+        run: python -m pytest tests/test_templates_endpoint.py -v
+
+      - name: Confirm Level 1 invariants in stateless pipeline tests
+        run: python -m pytest tests/test_stateless_pipeline.py -v

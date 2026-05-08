@@ -28,6 +28,23 @@ export interface FieldOption {
   label: string;   // shown to user (user language, e.g. "Marié(e)")
 }
 
+/**
+ * Optional human-language guidance for a single field.
+ * All values are objects keyed by locale (e.g. { "en": "...", "de": "..." }).
+ * Fallback order in the UI: user locale → "en" → "de".
+ * This is additive metadata — it never affects field_id, PDF filling, or grounding.
+ */
+export interface GuidanceText {
+  plain_language?: Record<string, string>;
+  why_needed?: Record<string, string>;
+  where_to_find?: Record<string, string>;
+  format_hint?: Record<string, string>;
+  example?: Record<string, string>;
+  required_documents?: Record<string, string[]>;
+  common_mistakes?: Record<string, string[]>;
+  warning?: Record<string, string>;
+}
+
 // One field from the uploaded PDF, with translated question text and grounding metadata
 export interface FieldDefinition {
   key: string;                         // exact PDF widget name
@@ -47,6 +64,12 @@ export interface FieldDefinition {
   source_text: string;                 // exact PDF text that grounds this question
   reason: string;                      // "pdf_field" | "derived_helper"
   question_type: string;
+  // ── Guidance layer — optional, never affects field_id or PDF filling ──────
+  guidance?: GuidanceText | null;
+  semantic_key?: string | null;
+  // ── Question quality metadata ─────────────────────────────────────────────
+  question_source?: string;           // "verified" | "semantic" | "ai" | "deterministic" | "label" | "key"
+  question_weak_reasons?: string[];
 }
 
 // Accuracy report included with every field extraction
@@ -64,6 +87,40 @@ export interface AnalysisReport {
   // Template metadata
   template_id: string | null;        // set when a verified template matched
   extraction_source: string;         // "verified_template" | "acroform" | "pdfplumber" | "auto"
+  support_level: number;             // 1=verified | 2=acroform | 3=flat | 4=scanned/unknown
+  // Phase D/D2 — AcroForm-specific metrics. Present on every extraction
+  // (zeroed for Level 1). Mirrors AnalysisReport.acroform_metrics on the backend.
+  acroform_metrics?: {
+    text_count: number;
+    date_count: number;
+    number_count: number;
+    checkbox_count: number;
+    radio_count: number;
+    select_count: number;
+    multiselect_count: number;
+    signature_count: number;
+    fields_missing_bbox: number;
+    fields_with_semantic_key: number;
+    fields_without_semantic_key: number;
+    fields_with_tu_label: number;
+    fields_with_weak_label: number;
+    duplicate_label_groups: number;
+  } | null;
+  // Phase D/D2 — fill strategy advertisement.
+  // "fitz_overlay" | "acroform" | "summary" | null (extraction-only call)
+  fill_strategy?: string | null;
+  // Question quality report
+  question_quality?: {
+    locale: string;
+    total_fields: number;
+    strong_questions: number;
+    weak_questions: number;
+    weak_field_ids: string[];
+    weak_reasons_by_field: Record<string, string[]>;
+    question_source_counts: Record<string, number>;
+    ai_calls_made: number;
+    ai_calls_skipped: number;
+  } | null;
 }
 
 export interface UploadResponse {

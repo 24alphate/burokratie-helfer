@@ -47,6 +47,110 @@ CONF_SHOW_MIN     = 0.70   # below this → show_question=False (blocked)
 CONF_REVIEW_MIN   = 0.90   # below this (but >= 0.70) → needs_review=True
 
 
+# ── AcroForm technical-name cleanup ───────────────────────────────────────────
+
+# Prefixes that signal a technical field name, not a user-visible label.
+# Pattern: prefix immediately followed by a capital letter (CamelCase naming).
+_ACROFORM_PREFIX_RE = re.compile(
+    r'^(txtf|txt|datef?|chk|check|cb|rb|radio|btn|button|lbl|label|cmb|combo|lst|list|'
+    r'fld|field|frm|form|grp|group|num|number|sel|select|img|image|sig|sign)(?=[A-Z_])',
+    re.IGNORECASE,
+)
+
+# German abbreviations / compound fragments found inside AcroForm field names.
+# Applied BEFORE camelCase splitting so they survive intact.
+_DE_COMPOUND_RE: list[tuple] = [
+    (re.compile(r'GebDatum', re.IGNORECASE), 'Geburtsdatum'),
+    (re.compile(r'GebName',  re.IGNORECASE), 'Geburtsname'),
+    (re.compile(r'GebOrt',   re.IGNORECASE), 'Geburtsort'),
+    (re.compile(r'NrOrt',    re.IGNORECASE), 'Nummer Ort'),
+    (re.compile(r'StNr',     re.IGNORECASE), 'Steuernummer'),
+    (re.compile(r'AuswNr',   re.IGNORECASE), 'Ausweisnummer'),
+    (re.compile(r'PLZ',      re.IGNORECASE), 'Postleitzahl'),
+    (re.compile(r'TelNr',    re.IGNORECASE), 'Telefonnummer'),
+    (re.compile(r'HausNr',   re.IGNORECASE), 'Hausnummer'),
+    (re.compile(r'KtoNr',    re.IGNORECASE), 'Kontonummer'),
+]
+
+# Namespace group words to strip when they are the FIRST word after cleaning.
+# These are organisational sections in German forms (Person/Adresse/etc.),
+# not part of the label. Stripping them leaves just the meaningful term.
+# Example: "Person Vorname" → "Vorname"; "Adresse Postleitzahl" → "Postleitzahl"
+_NAMESPACE_WORDS = frozenset({
+    "person", "antragsteller", "antragstellerin", "antragesteller",
+    "adresse", "anschrift", "wohnort", "wohnadresse",
+    "leistung", "leistungen",
+    "arbeit", "beschaeftigung", "beschäftigung",
+    "partner", "ehegatte", "ehefrau", "ehemann",
+    "kind", "kinder",
+    "bank", "konto", "bankverbindung",
+    "angaben", "allgemein", "allgemeine",
+    "zeuge", "vertreter",
+})
+
+
+def _clean_acroform_field_name(name: str) -> str:
+    """
+    Convert a technical AcroForm /T field name into a human-readable label.
+
+    The result stays in the document language (usually German) so that the
+    AI translator can produce a correct question in the user's language.
+
+    Examples:
+        txtfPersonVorname  → Vorname
+        datePersonGebDatum → Geburtsdatum
+        chkLeistungSGBII   → SGBII
+        txtfAdressePLZ     → Postleitzahl
+        txtfAdresseStrasse → Strasse
+    """
+    if not name or len(name) < 3:
+        return name
+
+    # 1. Strip known technical prefix (only if something follows it)
+    cleaned = _ACROFORM_PREFIX_RE.sub('', name).strip()
+    if not cleaned:
+        cleaned = name
+
+    # 2. Expand German compound abbreviations before splitting
+    for pattern, replacement in _DE_COMPOUND_RE:
+        cleaned = pattern.sub(replacement, cleaned)
+
+    # 3. Split camelCase:  "PersonVorname" → "Person Vorname"
+    cleaned = re.sub(r'([a-z\d])([A-Z])', r'\1 \2', cleaned)
+    # Handle sequences like "SGBii" → keep SGBII together
+    cleaned = re.sub(r'([A-Z]{2,})([A-Z][a-z])', r'\1 \2', cleaned)
+
+    # 4. Replace underscores/dots
+    cleaned = cleaned.replace('_', ' ').replace('.', ' ')
+
+    # 5. Collapse whitespace
+    cleaned = ' '.join(cleaned.split())
+
+    # 6. Strip leading namespace group word (e.g. "Person", "Adresse")
+    parts = cleaned.split(' ', 1)
+    if len(parts) == 2 and parts[0].lower() in _NAMESPACE_WORDS:
+        cleaned = parts[1].strip()
+
+    return cleaned if cleaned else name
+
+
+def _looks_like_technical_id(text: str) -> bool:
+    """
+    Return True when text appears to be a raw technical identifier rather
+    than a readable question or label.  Used as a quality gate before
+    showing text to the user.
+    """
+    if not text or len(text) < 3:
+        return False
+    # Starts with a known AcroForm technical prefix pattern
+    if _ACROFORM_PREFIX_RE.match(text):
+        return True
+    # Long string with no spaces and mixed case (camelCase) = technical ID
+    if ' ' not in text and len(text) > 8 and re.search(r'[a-z][A-Z]', text):
+        return True
+    return False
+
+
 # ── Data model ────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -67,6 +171,8 @@ class FieldMapEntry:
     required: bool = False
     source_text: str = ""       # exact text from the PDF that grounds this field
     reason: str = "pdf_field"   # "pdf_field" | "derived_helper"
+    guidance: Optional[dict] = None      # GuidanceText dict from verified template (never affects field_id/filling)
+    semantic_key: Optional[str] = None   # e.g. "applicant.full_name" — for future answer reuse
 
 
 @dataclass
@@ -77,6 +183,35 @@ class ExtractionResult:
     error: Optional[str] = None
     template_id: Optional[str] = None      # set when a verified template matched
     extraction_source: str = "auto"        # "verified_template" | "acroform" | "pdfplumber" | "auto"
+    support_level: int = 4                 # 1=verified | 2=acroform | 3=flat | 4=scanned/unknown
+
+
+@dataclass
+class DocumentRoute:
+    """
+    Routing decision computed once per upload, before extraction runs.
+    Centralizes the level/source/template_id selection so callers can log,
+    test, and branch on a single value.
+    """
+    support_level: int          # 1 | 2 | 3 | 4
+    extraction_source: str      # "verified_template" | "acroform" | "pdfplumber" | "auto"
+    pdf_type: str               # "acroform" | "flat" | "scanned" | "verified_template" | "unknown"
+    template_id: Optional[str] = None
+    total_pages: int = 0
+
+
+# Mapping: extraction_source → support_level
+_EXTRACTION_SOURCE_TO_LEVEL = {
+    "verified_template": 1,
+    "acroform":          2,
+    "pdfplumber":        3,
+    "auto":              4,
+}
+
+
+def support_level_for(extraction_source: str) -> int:
+    """Single source of truth for support_level. Used by router and report builder."""
+    return _EXTRACTION_SOURCE_TO_LEVEL.get(extraction_source, 4)
 
 
 @dataclass
@@ -298,9 +433,23 @@ def _walk_field_tree(
 
             page_num, bbox = widget_positions.get(clean, (1, None))
 
+            # ── Human-readable label: try /TU (tooltip/alternate text) first ──
+            # /TU is the AcroForm standard field for user-visible labels.
+            # Many professional PDF forms set it to a plain-language description.
+            tu = f.get("/TU", "")
+            if hasattr(tu, "get_object"):
+                tu = tu.get_object()
+            human_label = str(tu).strip() if tu else ""
+
+            # Fall back to a cleaned version of the technical field name.
+            # This strips prefixes (txtf/date/chk …) and splits camelCase
+            # so the AI translator has meaningful context instead of noise.
+            if not human_label or human_label == clean:
+                human_label = _clean_acroform_field_name(clean)
+
             results.append(FieldMapEntry(
-                field_id=clean,
-                original_label=clean,
+                field_id=clean,               # unchanged — PDF filling relies on this
+                original_label=human_label,   # now human-readable (not the technical ID)
                 field_type=ftype,
                 source_page=page_num,
                 bbox=bbox,
@@ -308,12 +457,41 @@ def _walk_field_tree(
                 current_value=val,
                 confidence=1.0,
                 source="acroform",
-                source_text=clean,   # AcroForm widget name IS the PDF ground truth
+                source_text=clean,            # keep raw widget name as grounding evidence
                 reason="pdf_field",
             ))
         except Exception:
             continue
     return results
+
+
+def _annotate_semantic_keys(fields: list[FieldMapEntry]) -> None:
+    """
+    Phase D/D3 — Best-effort post-extraction semantic_key inference.
+
+    Walks each FieldMapEntry whose `semantic_key` is unset and tries to
+    infer one from `original_label` via `infer_semantic_key()`. When a key
+    is found, the priority-2 lookup (`lookup_semantic`) becomes available
+    for that field, which means many common AcroForm labels (Vorname,
+    Geburtsdatum, PLZ, Ort, …) get a multi-locale verified question
+    without ever calling Groq.
+
+    Safe and additive: never overwrites an existing semantic_key (e.g. set
+    by a verified template), never raises, never changes field_id.
+    """
+    try:
+        from app.services.semantic_questions import infer_semantic_key
+    except Exception:
+        return
+    for f in fields:
+        if f.semantic_key:
+            continue
+        try:
+            key = infer_semantic_key(f.original_label or "")
+        except Exception:
+            key = None
+        if key:
+            f.semantic_key = key
 
 
 def extract_acroform_fields(pdf_bytes: bytes) -> list[FieldMapEntry]:
@@ -539,59 +717,121 @@ def _extract_full_text(pdf_bytes: bytes) -> str:
 
 # ── Main entry point ───────────────────────────────────────────────────────────
 
+def route_document(pdf_bytes: bytes) -> DocumentRoute:
+    """
+    Decide which extraction engine to run BEFORE running it.
+
+    Single source of truth for support_level routing. Returns the routing
+    decision so callers can log it, branch on it, and test it independently
+    of the extraction engines themselves.
+    """
+    # Lazy import to avoid circular dependency at module load time.
+    from app.services.form_templates import find_matching_template
+
+    full_text = _extract_full_text(pdf_bytes)
+    pdf_type, total_pages = detect_pdf_type(pdf_bytes)
+
+    template = find_matching_template(full_text)
+    if template:
+        return DocumentRoute(
+            support_level=1,
+            extraction_source="verified_template",
+            pdf_type="verified_template",
+            template_id=template.template_id,
+            total_pages=total_pages,
+        )
+
+    if pdf_type == "acroform":
+        return DocumentRoute(
+            support_level=2,
+            extraction_source="acroform",
+            pdf_type="acroform",
+            total_pages=total_pages,
+        )
+    if pdf_type == "flat":
+        return DocumentRoute(
+            support_level=3,
+            extraction_source="pdfplumber",
+            pdf_type="flat",
+            total_pages=total_pages,
+        )
+    # scanned or unknown
+    return DocumentRoute(
+        support_level=4,
+        extraction_source="auto",
+        pdf_type=pdf_type,
+        total_pages=total_pages,
+    )
+
+
 def extract_field_map(pdf_bytes: bytes) -> ExtractionResult:
     """
     Full pipeline entry point.
 
-    Order of precedence:
-      1. Verified template fingerprint — if a known form is detected, use the
-         hand-verified field map (confidence=1.0, no regex guessing).
-      2. AcroForm extraction — programmatically fillable PDFs.
-      3. pdfplumber text extraction — flat PDFs with regex heuristics.
+    Routes via route_document() then runs the matching extraction engine.
+      1. Verified template — hand-verified field map (confidence=1.0)
+      2. AcroForm — programmatically fillable PDFs
+      3. pdfplumber — flat PDFs with regex heuristics
+      4. Scanned/unknown — empty field list (Level 4 not yet supported)
     """
-    # ── Step 1: Check verified templates ──────────────────────────────────────
-    # Lazy import to avoid circular dependency at module load time.
-    from app.services.form_templates import find_matching_template
+    route = route_document(pdf_bytes)
 
-    full_text   = _extract_full_text(pdf_bytes)
-    _, total_pages = detect_pdf_type(pdf_bytes)   # still need page count
-
-    template = find_matching_template(full_text)
-    if template:
+    # Level 1: verified template
+    if route.support_level == 1:
+        from app.services.form_templates import find_template_by_id
+        template = find_template_by_id(route.template_id) if route.template_id else None
+        fields = template.get_field_map() if template else []
         return ExtractionResult(
-            pdf_type="verified_template",
-            fields=template.get_field_map(),
-            total_pages=total_pages,
-            template_id=template.template_id,
-            extraction_source="verified_template",
+            pdf_type=route.pdf_type,
+            fields=fields,
+            total_pages=route.total_pages,
+            template_id=route.template_id,
+            extraction_source=route.extraction_source,
+            support_level=route.support_level,
         )
 
-    # ── Step 2/3: Automatic extraction ────────────────────────────────────────
-    pdf_type, _ = detect_pdf_type(pdf_bytes)
-
-    if pdf_type == "acroform":
+    # Level 2: AcroForm — may degrade to pdfplumber if widgets are empty
+    if route.support_level == 2:
         fields = extract_acroform_fields(pdf_bytes)
+        # Phase D/D3 — inferring semantic_key from the cleaned label lets the
+        # priority-2 layer fire for AcroForm fields. Skipped for Level 1
+        # (templates set semantic_key explicitly) and Level 3+ (handled below).
+        _annotate_semantic_keys(fields)
         if not fields:
             fields = extract_flat_fields(pdf_bytes)
-            effective_type  = "flat" if fields else "acroform"
+            effective_type    = "flat" if fields else "acroform"
             extraction_source = "pdfplumber" if fields else "acroform"
+            support_level     = 3 if fields else 2
         else:
             effective_type    = "acroform"
             extraction_source = "acroform"
-    elif pdf_type == "flat":
-        fields = extract_flat_fields(pdf_bytes)
-        effective_type    = "flat"
-        extraction_source = "pdfplumber"
-    else:
-        fields = []
-        effective_type    = pdf_type
-        extraction_source = "auto"
+            support_level     = 2
+        return ExtractionResult(
+            pdf_type=effective_type,
+            fields=fields,
+            total_pages=route.total_pages,
+            extraction_source=extraction_source,
+            support_level=support_level,
+        )
 
+    # Level 3: flat PDF
+    if route.support_level == 3:
+        fields = extract_flat_fields(pdf_bytes)
+        return ExtractionResult(
+            pdf_type="flat",
+            fields=fields,
+            total_pages=route.total_pages,
+            extraction_source="pdfplumber",
+            support_level=3,
+        )
+
+    # Level 4: scanned/unknown — no fields extracted
     return ExtractionResult(
-        pdf_type=effective_type,
-        fields=fields,
-        total_pages=total_pages,
-        extraction_source=extraction_source,
+        pdf_type=route.pdf_type,
+        fields=[],
+        total_pages=route.total_pages,
+        extraction_source="auto",
+        support_level=4,
     )
 
 
@@ -600,6 +840,7 @@ def extract_field_map(pdf_bytes: bytes) -> ExtractionResult:
 def validate_no_hallucinations(
     field_map: list[FieldMapEntry],
     translations: dict[str, dict],
+    user_language: str = "en",
 ) -> HallucinationReport:
     """
     Validates AI-returned translations against the extracted field map.
@@ -607,10 +848,12 @@ def validate_no_hallucinations(
     Rules:
     - Any key in `translations` NOT in `field_map` → INVENTED → DISCARDED
     - Any field_id in `field_map` NOT in `translations` → MISSING → BACKFILLED
-      with {question: original_label, explanation: "", translated_options: {}}
+      using deterministic table first, then original_label.
 
     Returns HallucinationReport with a clean, safe translations dict.
     """
+    from app.services.question_translator import get_deterministic_translation
+
     extracted_ids = {f.field_id for f in field_map}
     returned_ids  = set(translations.keys())
 
@@ -624,8 +867,13 @@ def validate_no_hallucinations(
     field_by_id = {f.field_id: f for f in field_map}
     for fid in missing:
         entry = field_by_id[fid]
+        # Try deterministic translation before falling back to raw German label
+        question = (
+            get_deterministic_translation(entry.original_label, user_language)
+            or entry.original_label
+        )
         cleaned[fid] = {
-            "question": entry.original_label,
+            "question": question,
             "explanation": "",
             "translated_options": {opt: opt for opt in entry.options},
         }
@@ -658,6 +906,8 @@ def field_map_to_defs(
     """
     from app.schemas.document import FieldDefinition, FieldOption
 
+    from app.schemas.document import GuidanceText
+
     defs = []
     for i, entry in enumerate(field_map, 1):
         tr = validated_translations.get(entry.field_id, {})
@@ -672,10 +922,95 @@ def field_map_to_defs(
             entry.confidence < CONF_REVIEW_MIN or entry.source != "acroform"
         )
 
+        guidance = None
+        if isinstance(entry.guidance, dict):
+            try:
+                guidance = GuidanceText(**entry.guidance)
+            except Exception:
+                guidance = None
+
+        # ── Resolve question text with explicit source tracking ──────────────────
+        # The _source key is set by process_pdf.py when pre-resolving fields.
+        # field_map_to_defs acts as a final safety net for anything that slipped through.
+        resolved_source = tr.get("_source", "")
+
+        if resolved_source in ("verified", "semantic", "deterministic") and tr.get("question"):
+            # Already resolved at a high-quality level upstream — trust it
+            raw_question = tr["question"]
+        else:
+            # Apply quality gates to AI or unknown-source questions
+            raw_question = tr.get("question") or ""
+
+            # Gate 1: empty or technical ID
+            if not raw_question or _looks_like_technical_id(raw_question):
+                from app.services.question_translator import get_deterministic_translation
+                raw_question = (
+                    get_deterministic_translation(entry.original_label, user_language)
+                    or entry.original_label
+                )
+                if raw_question != tr.get("question", ""):
+                    resolved_source = "deterministic" if raw_question != entry.original_label else "label"
+
+            # Gate 2: AI returned source-language label unchanged
+            elif raw_question == entry.original_label and user_language != document_language:
+                from app.services.question_translator import get_deterministic_translation
+                raw_question = (
+                    get_deterministic_translation(entry.original_label, user_language)
+                    or entry.original_label
+                )
+                if raw_question != entry.original_label:
+                    resolved_source = "deterministic"
+                else:
+                    resolved_source = "label"
+
+        if not resolved_source:
+            resolved_source = "ai" if tr.get("question") else "label"
+
+        # Build explanation: prefer AI's help field > explanation > empty
+        raw_explanation = (
+            tr.get("help") or tr.get("explanation", "")
+        )
+
+        # Build example and format from the translation dict
+        tr_example = tr.get("example", "")
+        tr_format  = tr.get("format", "")
+
+        # Always include fallback language keys so frontend has safe alternatives.
+        question_dict: dict[str, str] = {user_language: raw_question}
+        if document_language != user_language:
+            question_dict[document_language] = entry.original_label
+        if user_language != "en" and document_language != "en":
+            from app.services.question_translator import get_deterministic_translation
+            from app.services.verified_questions import lookup_verified as _lv
+            vq_en = _lv(entry.field_id, entry.original_label, "en")
+            question_dict["en"] = (
+                (vq_en or {}).get("question")
+                or get_deterministic_translation(entry.original_label, "en")
+                or entry.original_label
+            )
+
+        # ── Guidance injection ──────────────────────────────────────────────────
+        # If the field has no template guidance, inject guidance from the
+        # translation result (AI help text, example, format) and/or verified data.
+        effective_guidance = guidance
+        if effective_guidance is None:
+            plain = raw_explanation
+            fmt   = tr_format
+            ex    = tr_example
+            if plain or fmt or ex:
+                try:
+                    effective_guidance = GuidanceText(
+                        plain_language={user_language: plain} if plain else {},
+                        format_hint={user_language: fmt} if fmt else {},
+                        example={user_language: ex} if ex else {},
+                    )
+                except Exception:
+                    effective_guidance = None
+
         defs.append(FieldDefinition(
             key=entry.field_id,
-            question={user_language: tr.get("question") or entry.original_label},
-            explanation={user_language: tr.get("explanation", "")},
+            question=question_dict,
+            explanation={user_language: raw_explanation},
             input_type=entry.field_type,
             options=options,
             original_label=entry.original_label,
@@ -689,6 +1024,9 @@ def field_map_to_defs(
             source_text=entry.source_text,
             reason=entry.reason,
             question_type=entry.reason,
+            guidance=effective_guidance,
+            semantic_key=entry.semantic_key,
+            question_source=resolved_source,
         ))
     return defs
 

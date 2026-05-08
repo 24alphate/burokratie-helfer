@@ -4,11 +4,25 @@ Tests for PDF fill fidelity — same PDF in, same PDF out with answers overlaid.
 All tests use a minimal synthetic PDF created with reportlab (no real Jobcenter PDF
 committed to the repo). The fixtures create a 2-page flat PDF with known German text
 that mirrors the structure of the Jobcenter BuT form.
+
+Hard dependency: PyMuPDF (`fitz`). It is declared in requirements.txt
+(pymupdf==1.24.11) and is installed in CI. If a developer runs these tests
+in an environment that lacks PyMuPDF, every test in this file is SKIPPED
+with a clear reason (rather than ImportError-crashing collection). To run
+the full fidelity suite locally:  `pip install pymupdf`.
 """
 from __future__ import annotations
 
 import io
 import pytest
+
+# Skip the whole file with a visible reason if PyMuPDF isn't installed.
+# importorskip raises pytest.skip — collection succeeds, every test reports SKIPPED.
+pytest.importorskip(
+    "fitz",
+    reason="PyMuPDF (`fitz`) is required for PDF fill fidelity tests. "
+           "Install with: pip install pymupdf==1.24.11 (also in requirements.txt).",
+)
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────

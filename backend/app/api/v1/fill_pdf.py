@@ -31,6 +31,8 @@ Response headers on verified-template fills:
 from __future__ import annotations
 
 import logging
+import re
+from datetime import date
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
@@ -41,6 +43,26 @@ from app.config import settings
 from app.services.pdf_token import verify_pdf_token
 
 log = logging.getLogger("burokratie.fill_pdf")
+
+
+def _smart_filename(template_id: str | None, original_filename: str) -> str:
+    """
+    Build a human-readable download filename.
+
+    Verified template:  <template-name-slug>_<YYYY-MM-DD>.pdf
+                        e.g. "jobcenter-but-v1_2026-05-07.pdf"
+    Other:              <original-stem>_filled_<YYYY-MM-DD>.pdf
+    """
+    today = date.today().isoformat()
+    if template_id:
+        from app.services.form_templates import find_template_by_id
+        tmpl = find_template_by_id(template_id)
+        if tmpl:
+            slug = re.sub(r"[^A-Za-z0-9-]+", "-", tmpl.template_id).strip("-").lower()
+            return f"{slug}_{today}.pdf"
+    stem = original_filename.rsplit(".", 1)[0] or "form"
+    stem = re.sub(r"[^A-Za-z0-9_-]+", "_", stem)
+    return f"{stem}_filled_{today}.pdf"
 
 router = APIRouter(tags=["stateless"])
 
@@ -87,10 +109,13 @@ async def fill_pdf(body: FillPdfRequest):
     field_ids: list[str] = token_data["field_ids"]
     filename: str        = token_data.get("filename", "form.pdf")
     template_id: str | None = token_data.get("template_id")
+    # Phase E/E1 — May be None for tokens signed before E1; treated as
+    # "unknown level" → summary fallback allowed, same as Level 3.
+    support_level: int | None = token_data.get("support_level")
 
     log.info(
-        "fill-pdf START filename=%s template_id=%s field_count=%d answer_count=%d",
-        filename, template_id, len(field_ids), len(body.answers),
+        "fill-pdf START filename=%s template_id=%s support_level=%s field_count=%d answer_count=%d",
+        filename, template_id, support_level, len(field_ids), len(body.answers),
     )
 
     # ── 2. Grounding guard ───────────────────────────────────────────────────
@@ -106,47 +131,214 @@ async def fill_pdf(body: FillPdfRequest):
             ),
         )
 
-    safe_name = filename.rsplit(".", 1)[0] + "_filled.pdf"
+    safe_name = _smart_filename(template_id, filename)
 
-    # ── 3a. Verified template → fitz overlay onto original PDF ───────────────
+    # ── 3a. Verified template → dispatch on template.fill_strategy ──────────
+    # Per Hard Rule 7 (Part I): for Level 1 templates, fill errors surface
+    # as a clean error, not a silent fallback to a summary or minimal PDF.
+    # Phase F/0-B added the "acroform" branch alongside the existing
+    # "fitz_overlay" branch so verified templates can use the AcroForm fill
+    # path WITHOUT hand-authored WriteSpecs.
     if template_id:
         from app.services.form_templates import find_template_by_id
         template = find_template_by_id(template_id)
         if template:
-            write_specs = template.get_write_specs()
-            from app.services.pdf_generator.fitz_overlay import fill_with_fitz
-            try:
-                out_bytes, filled_ids, skipped_ids = fill_with_fitz(
-                    pdf_bytes,
-                    body.answers,
-                    write_specs,
-                    debug=body.debug_overlay,
-                )
-            except Exception as e:
-                log.error("fill-pdf FITZ_ERROR: %s — falling back to summary", e)
-                # Fall through to legacy path
-            else:
+            template_fill_strategy = getattr(template, "fill_strategy", "fitz_overlay")
+
+            # ── 3a-i. Verified template + fitz_overlay ─────────────────────
+            if template_fill_strategy == "fitz_overlay":
+                write_specs = template.get_write_specs()
+                from app.services.pdf_generator.fitz_overlay import fill_with_fitz
+                try:
+                    out_bytes, filled_ids, skipped_ids = fill_with_fitz(
+                        pdf_bytes,
+                        body.answers,
+                        write_specs,
+                        debug=body.debug_overlay,
+                    )
+                except Exception as e:
+                    log.critical(
+                        "fill-pdf FITZ_OVERLAY_FAILED template_id=%s err=%s",
+                        template_id, e,
+                    )
+                    raise HTTPException(
+                        status_code=500,
+                        detail=(
+                            "We could not fill your form. Please try again, "
+                            "or upload a different copy of the document."
+                        ),
+                    )
+                else:
+                    log.info(
+                        "fill-pdf FITZ_DONE filename=%s filled=%d skipped=%d",
+                        filename, len(filled_ids), len(skipped_ids),
+                    )
+                    headers = {
+                        "Content-Disposition": f'attachment; filename="{safe_name}"',
+                        "X-Fill-Strategy": "fitz_overlay",
+                        "X-Fields-Filled": str(len(filled_ids)),
+                        "Access-Control-Expose-Headers":
+                            "X-Fill-Strategy,X-Fields-Filled,X-Not-Fillable-Fields",
+                    }
+                    if skipped_ids:
+                        # Only include fields the user answered but couldn't be placed
+                        not_placed = [s for s in skipped_ids if s in body.answers]
+                        if not_placed:
+                            headers["X-Not-Fillable-Fields"] = ",".join(not_placed)
+                    return Response(
+                        content=out_bytes,
+                        media_type="application/pdf",
+                        headers=headers,
+                    )
+
+            # ── 3a-ii. Verified template + acroform fill (Phase F/0-B) ─────
+            # Strict mirror of Phase E1's Level 2 policy: the engine writes
+            # directly into the source PDF's AcroForm widgets via PyPDFGenerator,
+            # but NEVER returns a summary or minimal PDF, and NEVER returns a
+            # zero-fill PDF when the user supplied answers. Anything that
+            # would violate these rules surfaces as a friendly 500.
+            if template_fill_strategy == "acroform":
+                import os
+                import tempfile
+                from app.services.pdf_generator.base import PDFGenerationRequest
+                from app.services.pdf_generator.pypdf_generator import PyPDFGenerator
+
+                # Phase F1 — expand radio_group logical answers into per-widget
+                # Yes/Off writes BEFORE handing off to PyPDFGenerator. The
+                # logical field_id stays in extracted_field_ids (so the
+                # grounding guard above accepts it), but the actual PDF widgets
+                # never appear in extracted_field_ids — only the engine knows
+                # about them via template.get_radio_groups().
+                radio_groups = list(getattr(template, "get_radio_groups", lambda: [])())
+                expanded_answers = dict(body.answers)
+                for rg in radio_groups:
+                    chosen = expanded_answers.pop(rg.field_id, None)
+                    selected_widget = None
+                    if chosen is not None:
+                        for value, widget in rg.options:
+                            if value == chosen:
+                                selected_widget = widget
+                                break
+                        if selected_widget is None:
+                            log.warning(
+                                "fill-pdf RADIO_GROUP_VALUE_NOT_IN_OPTIONS "
+                                "template_id=%s field_id=%s value=%r",
+                                template_id, rg.field_id, chosen,
+                            )
+                    # Always write Off to every sibling first; if a selection
+                    # was made, overwrite the chosen widget with Yes. If the
+                    # user didn't answer this radio group at all (chosen is
+                    # None), every widget stays Off — same as Adobe behavior.
+                    for widget_name in rg.widget_names:
+                        expanded_answers[widget_name] = (
+                            "Yes" if widget_name == selected_widget else "Off"
+                        )
+
+                _generator = PyPDFGenerator()
+                tmp_fd, tmp_path = tempfile.mkstemp(suffix=".pdf")
+                try:
+                    with os.fdopen(tmp_fd, "wb") as f:
+                        f.write(pdf_bytes)
+                    gen_request = PDFGenerationRequest(
+                        template_id=template_id,
+                        field_values=expanded_answers,
+                        blank_pdf_path=tmp_path,
+                        field_labels=body.field_labels,
+                    )
+                    try:
+                        result = await _generator.generate(gen_request)
+                    except Exception as e:
+                        log.critical(
+                            "fill-pdf VERIFIED_ACROFORM_GENERATOR_CRASHED "
+                            "template_id=%s err=%s",
+                            template_id, e,
+                        )
+                        raise HTTPException(
+                            status_code=500,
+                            detail=(
+                                "We could not safely fill this PDF. Please try "
+                                "another PDF or fill this one manually."
+                            ),
+                        )
+                finally:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+
+                if result.warnings:
+                    log.warning(
+                        "fill-pdf VERIFIED_ACROFORM_WARNINGS template_id=%s: %s",
+                        template_id, result.warnings,
+                    )
+
+                # Strict invariant 1 — generator MUST have taken the AcroForm
+                # path. Summary or minimal output for a verified template is
+                # a safety violation.
+                if result.strategy != "acroform":
+                    log.critical(
+                        "fill-pdf VERIFIED_ACROFORM_NON_ACROFORM_OUTPUT "
+                        "template_id=%s strategy=%s warnings=%s",
+                        template_id, result.strategy, result.warnings,
+                    )
+                    raise HTTPException(
+                        status_code=500,
+                        detail=(
+                            "We could not safely fill this PDF. Please try "
+                            "another PDF or fill this one manually."
+                        ),
+                    )
+
+                # Strict invariant 2 — zero fields written when the user
+                # supplied answers means the widgets did not accept our
+                # values. Refuse rather than return an empty form.
+                if result.field_count_filled == 0 and len(body.answers) > 0:
+                    log.critical(
+                        "fill-pdf VERIFIED_ACROFORM_ZERO_FILL "
+                        "template_id=%s answers=%d",
+                        template_id, len(body.answers),
+                    )
+                    raise HTTPException(
+                        status_code=500,
+                        detail=(
+                            "We could not safely fill this PDF. Please try "
+                            "another PDF or fill this one manually."
+                        ),
+                    )
+
                 log.info(
-                    "fill-pdf FITZ_DONE filename=%s filled=%d skipped=%d",
-                    filename, len(filled_ids), len(skipped_ids),
+                    "fill-pdf VERIFIED_ACROFORM_DONE template_id=%s filled=%d",
+                    template_id, result.field_count_filled,
                 )
-                headers = {
-                    "Content-Disposition": f'attachment; filename="{safe_name}"',
-                    "X-Fill-Strategy": "fitz_overlay",
-                    "X-Fields-Filled": str(len(filled_ids)),
-                    "Access-Control-Expose-Headers":
-                        "X-Fill-Strategy,X-Fields-Filled,X-Not-Fillable-Fields",
-                }
-                if skipped_ids:
-                    # Only include fields the user answered but couldn't be placed
-                    not_placed = [s for s in skipped_ids if s in body.answers]
-                    if not_placed:
-                        headers["X-Not-Fillable-Fields"] = ",".join(not_placed)
                 return Response(
-                    content=out_bytes,
+                    content=result.pdf_bytes,
                     media_type="application/pdf",
-                    headers=headers,
+                    headers={
+                        "Content-Disposition": f'attachment; filename="{safe_name}"',
+                        # Verified-acroform path is still strictly Level 1.
+                        # The advertisement uses the precise strategy name so
+                        # the frontend can show the right output guarantee.
+                        "X-Fill-Strategy": "acroform",
+                        "X-Fields-Filled": str(result.field_count_filled),
+                        "Access-Control-Expose-Headers":
+                            "X-Fill-Strategy,X-Fields-Filled,X-Not-Fillable-Fields",
+                    },
                 )
+
+            # Defence in depth: an unknown strategy on a Level 1 template is
+            # a config bug. Refuse rather than silently fall through to the
+            # legacy AcroForm/summary path below.
+            log.critical(
+                "fill-pdf UNKNOWN_FILL_STRATEGY template_id=%s strategy=%s",
+                template_id, template_fill_strategy,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "We could not safely fill this PDF. Please try "
+                    "another PDF or fill this one manually."
+                ),
+            )
 
     # ── 3b. AcroForm / unknown flat → legacy PyPDFGenerator path ─────────────
     import os
@@ -165,7 +357,32 @@ async def fill_pdf(body: FillPdfRequest):
             blank_pdf_path=tmp_path,
             field_labels=body.field_labels,
         )
-        result = await _generator.generate(gen_request)
+        try:
+            result = await _generator.generate(gen_request)
+        except Exception as e:
+            # Phase E/E1 — Level 2 must NEVER silently degrade to a summary.
+            # Anything that crashes the generator surfaces as a clean error.
+            log.critical(
+                "fill-pdf PYPDF_GENERATOR_CRASHED level=%s err=%s",
+                support_level, e,
+            )
+            if support_level == 2:
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        "We could not safely fill this PDF. Please try another "
+                        "PDF or fill this one manually."
+                    ),
+                )
+            # Levels 3/None: re-raise as a generic 500; the client-side
+            # friendlyError() maps it to a user-safe message.
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "Something went wrong while preparing your form. "
+                    "Please try again or upload a different copy of the PDF."
+                ),
+            )
     finally:
         try:
             os.unlink(tmp_path)
@@ -175,9 +392,46 @@ async def fill_pdf(body: FillPdfRequest):
     if result.warnings:
         log.warning("fill-pdf WARNINGS filename=%s: %s", filename, result.warnings)
 
+    # Phase E/E1 — Level 2 invariant: the generator MUST have produced an
+    # AcroForm-filled output. If it returned a summary or a minimal placeholder,
+    # the user would receive a "PDF" that is NOT their original form filled in.
+    # Refuse instead of silently downgrading.
+    if support_level == 2 and result.strategy != "acroform":
+        log.critical(
+            "fill-pdf LEVEL_2_NON_ACROFORM_OUTPUT strategy=%s filename=%s warnings=%s",
+            result.strategy, filename, result.warnings,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "We could not safely fill this PDF. Please try another "
+                "PDF or fill this one manually."
+            ),
+        )
+    # Phase E/E1 — Same invariant for the field-count: an AcroForm fill that
+    # writes zero fields while the user provided answers means the widgets
+    # didn't accept our values. Refuse rather than return an empty PDF.
+    if (
+        support_level == 2
+        and result.strategy == "acroform"
+        and result.field_count_filled == 0
+        and len(body.answers) > 0
+    ):
+        log.critical(
+            "fill-pdf LEVEL_2_ZERO_FILL filename=%s answers=%d",
+            filename, len(body.answers),
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "We could not safely fill this PDF. Please try another "
+                "PDF or fill this one manually."
+            ),
+        )
+
     log.info(
-        "fill-pdf LEGACY_DONE filename=%s filled_fields=%d output_kb=%d",
-        filename, result.field_count_filled, len(result.pdf_bytes) // 1024,
+        "fill-pdf LEGACY_DONE filename=%s strategy=%s filled_fields=%d output_kb=%d",
+        filename, result.strategy, result.field_count_filled, len(result.pdf_bytes) // 1024,
     )
 
     return Response(
@@ -185,7 +439,10 @@ async def fill_pdf(body: FillPdfRequest):
         media_type="application/pdf",
         headers={
             "Content-Disposition": f'attachment; filename="{safe_name}"',
-            "X-Fill-Strategy": "pypdf_or_summary",
+            # Phase E/E1 — Header now reports the EXACT strategy taken so the
+            # frontend can show the right output-guarantee message.
+            "X-Fill-Strategy": result.strategy,
+            "X-Fields-Filled": str(result.field_count_filled),
             "Access-Control-Expose-Headers": "X-Fill-Strategy,X-Fields-Filled,X-Not-Fillable-Fields",
         },
     )

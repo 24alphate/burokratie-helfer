@@ -277,14 +277,16 @@ class TestHallucinationValidator:
         assert "GhostField1" not in report.cleaned_translations
         assert "GhostField2" not in report.cleaned_translations
 
-    def test_missing_field_gets_raw_label_fallback(self):
+    def test_missing_field_gets_backfilled(self):
+        # Backfill now uses deterministic translation when available, else raw label.
         report = validate_no_hallucinations(self._make_field_map(), {
             "Vorname": {"question": "First name?", "explanation": "", "translated_options": {}},
         })
         assert "Familienstand" in report.missing
         assert "IBAN" in report.missing
-        assert report.cleaned_translations["Familienstand"]["question"] == "Familienstand"
-        assert report.cleaned_translations["IBAN"]["question"] == "IBAN"
+        # The important invariant: every field_id has a non-empty question after backfill.
+        assert report.cleaned_translations["Familienstand"]["question"]
+        assert report.cleaned_translations["IBAN"]["question"]
 
     def test_missing_field_backfill_preserves_options(self):
         report = validate_no_hallucinations(self._make_field_map(), {})
@@ -349,9 +351,9 @@ class TestHallucinationScenarios:
         assert not report.is_clean
         assert "InventedA" in report.invented
         assert "InventedB" in report.invented
-        # Vorname must be backfilled with its raw label
+        # Vorname must be backfilled (deterministic translation or raw label)
         assert "Vorname" in report.cleaned_translations
-        assert report.cleaned_translations["Vorname"]["question"] == "Vorname"
+        assert report.cleaned_translations["Vorname"]["question"]  # non-empty
         assert len(report.cleaned_translations) == 1
 
     def test_count_is_always_field_map_count(self):
@@ -656,41 +658,41 @@ class TestJobcenterPdfGoldenSnapshot:
         with open(JOBCENTER_PDF, "rb") as f:
             self.pdf_bytes = f.read()
 
-    def test_pdf_type_is_flat(self):
+    def test_pdf_type_is_verified_template(self):
+        # The real BuT PDF is now recognised by the verified template registry.
         result = extract_field_map(self.pdf_bytes)
-        assert result.pdf_type == "flat", f"Expected flat, got {result.pdf_type}"
+        assert result.pdf_type == "verified_template", f"Expected verified_template, got {result.pdf_type}"
+
+    def test_template_id_is_set(self):
+        result = extract_field_map(self.pdf_bytes)
+        assert result.template_id == "jobcenter_but_v1"
 
     def test_total_pages_is_2(self):
         result = extract_field_map(self.pdf_bytes)
         assert result.total_pages == 2
 
-    def test_field_count_is_11(self):
+    def test_field_count_matches_template(self):
+        from app.services.form_templates.jobcenter_but import JobcenterButTemplate
+        expected = len(JobcenterButTemplate().get_field_map())
         result = extract_field_map(self.pdf_bytes)
-        assert len(result.fields) == 11, (
-            f"Expected 11 fields, got {len(result.fields)}. "
+        assert len(result.fields) == expected, (
+            f"Expected {expected} fields (verified template), got {len(result.fields)}. "
             f"IDs: {[f.field_id for f in result.fields]}"
         )
 
     def test_expected_field_ids_present(self):
         result = extract_field_map(self.pdf_bytes)
         ids = {f.field_id for f in result.fields}
+        # Core BuT field_ids from the verified template
         required = {
-            "name_vorname",
-            "postanschrift",
-            "name_vorname_geburtsdatum",
-            "ort_datum",
-            "leistungsart_auswahl",
+            "applicant_name_vorname",
+            "applicant_postanschrift",
+            "bedarfsgemeinschaft_nummer",
+            "child_name_vorname_geburtsdatum",
+            "tag_der_antragstellung",
         }
         for fid in required:
-            assert fid in ids, f"Expected field_id '{fid}' not found. Got: {ids}"
-
-    def test_multiselect_field_has_6_options(self):
-        result = extract_field_map(self.pdf_bytes)
-        ms = next((f for f in result.fields if f.field_type == "multiselect"), None)
-        assert ms is not None, "No multiselect field found"
-        assert len(ms.options) == 6, (
-            f"Expected 6 options for leistungsart_auswahl, got {len(ms.options)}"
-        )
+            assert fid in ids, f"Expected verified template field_id '{fid}' not found. Got: {ids}"
 
     def test_no_duplicate_field_ids(self):
         result = extract_field_map(self.pdf_bytes)
@@ -702,31 +704,34 @@ class TestJobcenterPdfGoldenSnapshot:
         for f in result.fields:
             assert f.source_text != "", f"Field '{f.field_id}' has empty source_text"
 
-    def test_all_fields_are_pdfplumber_source(self):
+    def test_all_fields_are_verified_template_source(self):
         result = extract_field_map(self.pdf_bytes)
         for f in result.fields:
-            assert f.source == "pdfplumber", f"Field '{f.field_id}' has source={f.source}"
+            assert f.source == "verified_template", f"Field '{f.field_id}' has source={f.source}"
 
-    def test_confidence_is_0_75(self):
+    def test_non_signature_confidence_is_1_0(self):
         result = extract_field_map(self.pdf_bytes)
         for f in result.fields:
-            assert f.confidence == 0.75, f"Field '{f.field_id}' has confidence={f.confidence}"
+            if f.field_type != "signature":
+                assert f.confidence == 1.0, f"Non-signature field '{f.field_id}' has confidence={f.confidence}"
 
-    def test_all_fields_shown_at_0_75(self):
-        """All pdfplumber fields (conf=0.75) must be shown (0.75 >= CONF_SHOW_MIN=0.70)."""
+    def test_non_signature_fields_shown(self):
+        """All non-signature verified template fields (conf=1.0) must be shown."""
         result = extract_field_map(self.pdf_bytes)
         hr = validate_no_hallucinations(result.fields, {})
         defs = field_map_to_defs(result.fields, hr.cleaned_translations, set(), "en", "de")
-        blocked = [d for d in defs if not d.show_question]
-        assert len(blocked) == 0, f"Unexpected blocked fields: {[d.key for d in blocked]}"
+        # Signature fields (confidence=0.5) are intentionally blocked
+        blocked_non_sig = [d for d in defs if not d.show_question and d.input_type != "signature"]
+        assert blocked_non_sig == [], f"Unexpected blocked non-signature fields: {[d.key for d in blocked_non_sig]}"
 
-    def test_all_fields_need_review_at_0_75(self):
-        """pdfplumber fields are shown but flagged needs_review."""
+    def test_verified_template_fields_have_confidence_1(self):
+        """Verified template non-signature fields must have confidence=1.0 (never needs_review from confidence)."""
         result = extract_field_map(self.pdf_bytes)
-        hr = validate_no_hallucinations(result.fields, {})
-        defs = field_map_to_defs(result.fields, hr.cleaned_translations, set(), "en", "de")
-        for d in defs:
-            assert d.needs_review is True, f"Field '{d.key}' should have needs_review=True"
+        for f in result.fields:
+            if f.field_type != "signature":
+                assert f.confidence == 1.0, f"Verified field '{f.field_id}' should have confidence 1.0"
+        # needs_review is a quality-checker flag that also depends on question text quality.
+        # Testing it against empty translations (no verified questions) is not meaningful here.
 
     def test_grounding_rate_is_100_percent(self):
         result = extract_field_map(self.pdf_bytes)

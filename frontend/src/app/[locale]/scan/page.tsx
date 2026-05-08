@@ -330,8 +330,10 @@ export default function ScanPage({ params }: { params: { locale: string } }) {
   const { sessionToken, caseId, setFields, setPdfToken, beginNewUpload } = useCaseStore();
 
   // ── Core state ──────────────────────────────────────────────────────────────
+  const [mounted, setMounted]         = useState(false);
   const [stage, setStage]             = useState<Stage>("loading_cv");
   const [cvReady, setCvReady]         = useState(false);
+  const [cameraReady, setCameraReady] = useState(false);
   const [pages, setPages]             = useState<ScannedPage[]>([]);
   const [processError, setProcessError] = useState<string | null>(null);
 
@@ -360,46 +362,93 @@ export default function ScanPage({ params }: { params: { locale: string } }) {
   const detectTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const warpTimer   = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ── Mount: load OpenCV ──────────────────────────────────────────────────────
-  useEffect(() => {
-    if (!sessionToken || !caseId) { router.replace("/"); return; }
+  // ── Step 1: mark client-side mount so Zustand localStorage has hydrated ─────
+  useEffect(() => { setMounted(true); }, []);
 
+  // ── Step 2: redirect if no valid session (after Zustand has hydrated) ────────
+  useEffect(() => {
+    if (mounted && (!sessionToken || !caseId)) router.replace("/");
+  }, [mounted, sessionToken, caseId, router]);
+
+  // ── Step 3: go to camera immediately — OpenCV loads in background ─────────────
+  // NEVER block the UI on OpenCV. Camera works without it (basic mode).
+  // OpenCV enhances capture when ready; if it fails the user never notices.
+  useEffect(() => {
+    if (!mounted || !sessionToken || !caseId) return;
+    setStage("camera");
     loadOpenCV()
-      .then(cv => {
-        cvRef.current = cv;
-        setCvReady(true);
-        setStage("camera");
-      })
-      .catch(() => setStage("error_cv"));
-  }, []);
+      .then(cv => { cvRef.current = cv; setCvReady(true); })
+      .catch(() => { /* stay in basic mode — camera still works */ });
+  }, [mounted, sessionToken, caseId]);
 
-  // ── Start camera when OpenCV is ready ──────────────────────────────────────
+  // ── Start camera whenever stage becomes "camera" (with or without OpenCV) ──
   useEffect(() => {
-    if (!cvReady || stage !== "camera") return;
+    if (stage !== "camera") return;
     startCamera();
     return () => stopCamera();
-  }, [cvReady, stage]);
+  }, [stage]);
 
   async function startCamera() {
     if (!navigator.mediaDevices?.getUserMedia) { setStage("error_camera"); return; }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: "environment" },
-          width:  { ideal: 1920 },
-          height: { ideal: 1080 },
-        },
-      });
+    setCameraReady(false);
+
+    // Attach a stream to the video element and start playback
+    async function attach(stream: MediaStream) {
       streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play().catch(() => {});
-        videoRef.current.onloadedmetadata = () => {
-          if (!videoRef.current) return;
-          setVideoSize({ w: videoRef.current.videoWidth, h: videoRef.current.videoHeight });
-        };
+      const video = videoRef.current;
+      if (!video) return;
+      video.srcObject = stream;
+      try { await video.play(); } catch { /* muted+playsInline should handle autoplay */ }
+    }
+
+    // Poll (via rAF) until the video has real dimensions or timeout
+    function waitForDimensions(ms = 4000): Promise<boolean> {
+      return new Promise(resolve => {
+        const deadline = setTimeout(() => resolve(false), ms);
+        function check() {
+          const v = videoRef.current;
+          if (!v) { clearTimeout(deadline); resolve(false); return; }
+          if (v.videoWidth > 0 && v.videoHeight > 0) {
+            clearTimeout(deadline);
+            setVideoSize({ w: v.videoWidth, h: v.videoHeight });
+            resolve(true);
+            return;
+          }
+          requestAnimationFrame(check);
+        }
+        check();
+      });
+    }
+
+    // Try getUserMedia; return null instead of throwing
+    async function tryGet(c: MediaStreamConstraints): Promise<MediaStream | null> {
+      try { return await navigator.mediaDevices.getUserMedia(c); }
+      catch { return null; }
+    }
+
+    try {
+      // Attempt 1: ideal rear camera, reasonable resolution (1280×720)
+      let stream = await tryGet({
+        video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false,
+      });
+
+      // Attempt 2: any camera, simplest constraints
+      if (!stream) stream = await tryGet({ video: true, audio: false });
+
+      if (!stream) { setStage("error_camera"); return; }
+
+      await attach(stream);
+      const hasVideo = await waitForDimensions(4000);
+
+      if (!hasVideo) {
+        // Stream established but video is black — stop and retry with bare constraints
+        stream.getTracks().forEach(t => t.stop());
+        const fallback = await tryGet({ video: true, audio: false });
+        if (fallback) { await attach(fallback); await waitForDimensions(3000); }
       }
-      // Run quad detection every 500ms
+
+      setCameraReady(true);
       detectTimer.current = setInterval(runLiveDetection, 500);
     } catch {
       setStage("error_camera");
@@ -408,7 +457,9 @@ export default function ScanPage({ params }: { params: { locale: string } }) {
 
   function stopCamera() {
     streamRef.current?.getTracks().forEach(t => t.stop());
+    streamRef.current = null;
     if (detectTimer.current) clearInterval(detectTimer.current);
+    setCameraReady(false);
   }
 
   function runLiveDetection() {
@@ -450,7 +501,17 @@ export default function ScanPage({ params }: { params: { locale: string } }) {
     setCapturedDataUrl(dataUrl);
     setCapturedSize({ w: canvas.width, h: canvas.height });
 
-    // Use detected corners or defaults
+    if (!cvReady) {
+      // Basic fallback: no warp/enhance — go straight to preview with raw capture
+      const q = checkQuality(canvas);
+      setPreviewDataUrl(dataUrl);
+      setPreviewSize({ w: canvas.width, h: canvas.height });
+      setQuality(q);
+      setStage("preview");
+      return;
+    }
+
+    // Full OpenCV mode: corner adjustment
     const initCorners = detectedQuad ?? defaultCorners(canvas.width, canvas.height);
     setCorners(initCorners);
     setDetectedQuad(null);
@@ -519,12 +580,11 @@ export default function ScanPage({ params }: { params: { locale: string } }) {
         naturalWidth:  previewSize.w,
         naturalHeight: previewSize.h,
       }]);
-      // Reset for next page
+      // Reset for next page — the camera-start effect fires when stage → "camera"
       setCapturedDataUrl(null);
       setPreviewDataUrl(null);
       setWarpPreviewUrl(null);
       setStage("camera");
-      startCamera();
     };
     tImg.src = previewDataUrl;
   }
@@ -537,12 +597,12 @@ export default function ScanPage({ params }: { params: { locale: string } }) {
     setCapturedDataUrl(null);
     setWarpPreviewUrl(null);
     setStage("camera");
-    startCamera();
   }
 
   function retakeFromPreview() {
     setPreviewDataUrl(null);
-    setStage("adjusting");
+    // In basic fallback mode (no OpenCV) there is no adjusting step — go back to camera
+    setStage(cvReady ? "adjusting" : "camera");
   }
 
   // ── Build PDF and send to existing pipeline ────────────────────────────────
@@ -574,14 +634,12 @@ export default function ScanPage({ params }: { params: { locale: string } }) {
       if (!result.fields?.length || !result.extracted_field_ids?.length) {
         setProcessError(l("no_fields", locale));
         setStage("camera");
-        startCamera();
         return;
       }
       const showable = result.fields.filter(f => f.show_question !== false);
       if (!showable.length) {
         setProcessError(l("no_fields", locale));
         setStage("camera");
-        startCamera();
         return;
       }
       setFields(showable, caseId ?? "stateless", result.filename, result.extracted_field_ids, attemptId);
@@ -595,11 +653,11 @@ export default function ScanPage({ params }: { params: { locale: string } }) {
           : msg
       );
       setStage("camera");
-      startCamera();
     }
   }
 
   // ── Guard ───────────────────────────────────────────────────────────────────
+  if (!mounted) return null;             // wait for Zustand localStorage hydration
   if (!sessionToken || !caseId) return null;
 
   // ── Error screens ───────────────────────────────────────────────────────────
@@ -642,15 +700,58 @@ export default function ScanPage({ params }: { params: { locale: string } }) {
       <Header />
       <main className="flex flex-col" style={{ minHeight: "calc(100vh - 64px)" }}>
 
+        {/* Beta disclaimer banner — sets expectations before camera opens */}
+        <div className="bg-amber-50 border-b border-amber-200 px-4 py-2 flex items-center gap-2 text-xs">
+          <span className="px-1.5 py-0.5 bg-amber-200 text-amber-900 font-bold uppercase tracking-wider rounded text-[10px]">
+            Beta
+          </span>
+          <span className="text-amber-900">
+            {locale === "de"
+              ? "Scan ist experimentell. Wenn es nicht funktioniert, laden Sie eine PDF hoch."
+              : locale === "ar"
+              ? "المسح تجريبي. إذا لم يعمل، يرجى تحميل ملف PDF."
+              : locale === "tr"
+              ? "Tarama deneyseldir. Çalışmazsa lütfen bir PDF yükleyin."
+              : locale === "fr"
+              ? "Le scan est expérimental. Si cela ne fonctionne pas, téléversez un PDF."
+              : locale === "es"
+              ? "El escaneo es experimental. Si no funciona, suba un PDF."
+              : locale === "sq"
+              ? "Skanimi është eksperimental. Nëse nuk funksionon, ngarkoni një PDF."
+              : locale === "ru"
+              ? "Сканирование экспериментальное. Если не работает, загрузите PDF."
+              : locale === "uk"
+              ? "Сканування експериментальне. Якщо не працює, завантажте PDF."
+              : "Scanning is experimental. If it doesn't work, please upload a PDF instead."}
+          </span>
+        </div>
+
         {/* ── Image area ── */}
         <div className="flex-1 bg-black flex flex-col">
+          {/* Dev debug bar — only in development */}
+          {process.env.NODE_ENV === "development" && (
+            <div className="bg-gray-900/90 text-green-400 text-[10px] font-mono px-2 py-1 flex gap-3 flex-wrap z-50">
+              <span>stage={stage}</span>
+              <span>cam={cameraReady ? "✓" : "✗"}</span>
+              <span>cv={cvReady ? "✓" : "✗"}</span>
+              <span>video={videoSize.w}×{videoSize.h}</span>
+              <span>secure={typeof window !== "undefined" && window.isSecureContext ? "✓" : "⚠"}</span>
+              <span>gum={typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia ? "✓" : "✗"}</span>
+            </div>
+          )}
           {/* Loading */}
           {stage === "loading_cv" && (
-            <div className="flex-1 flex items-center justify-center">
+            <div className="flex-1 flex flex-col items-center justify-center gap-6">
               <div className="text-center text-white">
                 <div className="animate-spin text-4xl mb-4">⚙️</div>
                 <p>{l("loading", locale)}</p>
               </div>
+              <button
+                onClick={() => router.replace(`/${locale}/upload`)}
+                className="text-sm text-white/60 hover:text-white/90 underline"
+              >
+                ← {l("upload_instead", locale)}
+              </button>
             </div>
           )}
 
@@ -704,10 +805,17 @@ export default function ScanPage({ params }: { params: { locale: string } }) {
           {/* ── Camera stage ── */}
           {stage === "camera" && (
             <>
-              <p className="text-xs text-gray-400 text-center">{l("aim", locale)}</p>
+              <p className="text-xs text-gray-400 text-center">
+                {cameraReady ? l("aim", locale) : "Camera starting…"}
+              </p>
               <button
                 onClick={capture}
-                className="w-full py-4 bg-brand-600 text-white rounded-2xl font-bold text-lg hover:bg-brand-700 active:scale-95 transition-all"
+                disabled={!cameraReady}
+                className={`w-full py-4 rounded-2xl font-bold text-lg transition-all ${
+                  cameraReady
+                    ? "bg-brand-600 text-white hover:bg-brand-700 active:scale-95"
+                    : "bg-gray-200 text-gray-400 cursor-not-allowed"
+                }`}
               >
                 {l("capture", locale)}
               </button>

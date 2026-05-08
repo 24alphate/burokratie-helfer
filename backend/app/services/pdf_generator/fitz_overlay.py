@@ -36,6 +36,34 @@ log = logging.getLogger("burokratie.fitz_overlay")
 _TRUTHY = {"yes", "ja", "true", "1", "x", "on", "checked"}
 
 
+def _find_label(page, primary: str, alts: list) -> list:
+    """
+    Try progressively shorter / simpler search strings until a match is found.
+
+    Order:
+      1. Primary string (full)
+      2. Each alt string in order
+      3. First 40 chars of primary
+      4. First 25 chars of primary
+      5. First 12 chars of primary  ← last resort, may be ambiguous
+
+    Returns the first non-empty rect list found, or [].
+    """
+    for candidate in [primary] + list(alts):
+        rects = page.search_for(candidate)
+        if rects:
+            return rects
+
+    # Progressive prefix fallbacks on the primary string
+    for n in (40, 25, 12):
+        if len(primary) > n:
+            rects = page.search_for(primary[:n])
+            if rects:
+                return rects
+
+    return []
+
+
 def _is_truthy(value: str) -> bool:
     return str(value).strip().lower() in _TRUTHY
 
@@ -101,17 +129,16 @@ def fill_with_fitz(
                 skipped.append(field_id)
                 continue
 
-            rects = page.search_for(spec.label_search)
-            if not rects:
-                # Try a shorter prefix of the label (first 30 chars)
-                short = spec.label_search[:30]
-                rects = page.search_for(short)
+            alts = getattr(spec, "alt_label_searches", [])
+            rects = _find_label(page, spec.label_search, alts)
 
             if not rects:
-                log.warning("fitz_overlay: label not found for %s: %r", field_id, spec.label_search)
+                log.warning(
+                    "fitz_overlay: label NOT FOUND for %s (type=%s) — tried %d candidates: primary=%r alts=%r",
+                    field_id, spec.field_type, 1 + len(alts), spec.label_search, alts,
+                )
                 skipped.append(field_id)
                 if debug:
-                    # Draw a red cross to mark the miss
                     page.draw_line(
                         fitz.Point(20, 20 + page_idx * 10),
                         fitz.Point(30, 30 + page_idx * 10),
@@ -122,6 +149,15 @@ def fill_with_fitz(
             label_rect = rects[0]  # use the first occurrence
             write_x = label_rect.x0 + spec.offset_x
             write_y = label_rect.y1 + spec.offset_y   # below bottom of label
+
+            if spec.field_type == "checkbox":
+                log.info(
+                    "fitz_overlay: CHECKBOX %s — label found at (%.1f, %.1f)-(%.1f, %.1f) "
+                    "→ X center at (%.1f, %.1f) size=%.1f",
+                    field_id,
+                    label_rect.x0, label_rect.y0, label_rect.x1, label_rect.y1,
+                    write_x, write_y, spec.checkbox_size,
+                )
 
         elif spec.strategy == "fixed":
             write_x = spec.fixed_x
@@ -134,16 +170,16 @@ def fill_with_fitz(
         # ── Write the answer ───────────────────────────────────────────────────
         try:
             if spec.field_type == "checkbox":
-                # Draw an X centered at (write_x, write_y)
+                # Draw a bold X centered at (write_x, write_y)
                 s = spec.checkbox_size
                 cx, cy = write_x, write_y
                 page.draw_line(
                     fitz.Point(cx - s, cy - s), fitz.Point(cx + s, cy + s),
-                    color=(0, 0, 0), width=1.5,
+                    color=(0, 0, 0), width=2.0,
                 )
                 page.draw_line(
                     fitz.Point(cx - s, cy + s), fitz.Point(cx + s, cy - s),
-                    color=(0, 0, 0), width=1.5,
+                    color=(0, 0, 0), width=2.0,
                 )
             else:
                 # Insert text (truncated to max_chars)

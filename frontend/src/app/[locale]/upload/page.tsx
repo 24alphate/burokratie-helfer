@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Header } from "@/components/layout/Header";
 import { StepProgress } from "@/components/layout/StepProgress";
+import { ConfirmModal } from "@/components/layout/ConfirmModal";
 import { FileDropzone } from "@/components/upload/FileDropzone";
 import { useCaseStore } from "@/store/caseStore";
 import { api, API_BASE, isProductionWithoutApiUrl } from "@/lib/api";
@@ -157,6 +158,7 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
     sessionToken, caseId,
     setLocale, setFields, setPdfToken,
     beginNewUpload,
+    fields, pdfToken, pdfUploadedAt, lastSavedAt, currentFilename,
   } = useCaseStore();
   const [mounted, setMounted]         = useState(false);
   const [stage, setStage]             = useState<Stage>("idle");
@@ -165,6 +167,7 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
   const [apiWarning, setApiWarning]   = useState<string | null>(null);
   const [report, setReport]           = useState<AnalysisReport | null>(null);
   const [noAiMode, setNoAiMode]       = useState(false);
+  const [showLeaveModal, setShowLeaveModal] = useState(false);
 
   // Diagnostic data from last upload
   const [rawFields, setRawFields]         = useState<RawFieldEntry[]>([]);
@@ -181,9 +184,23 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
   useEffect(() => {
     if (!mounted) return;
     if (isProductionWithoutApiUrl()) {
-      setApiWarning(`API not configured. Set NEXT_PUBLIC_API_URL in Vercel env vars. Calling: ${API_BASE}`);
+      // Misconfiguration is a developer problem, not a user problem.
+      // Log to console so devs see it, but show users a generic
+      // "service unavailable" message instead of leaking env-var names.
+      console.error("[upload] API not configured. Set NEXT_PUBLIC_API_URL.");
+      setApiWarning(
+        locale === "de" ? "Der Dienst ist gerade nicht erreichbar. Bitte versuchen Sie es später erneut."
+        : locale === "ar" ? "الخدمة غير متاحة الآن. يرجى المحاولة لاحقًا."
+        : locale === "tr" ? "Hizmet şu anda kullanılamıyor. Lütfen daha sonra tekrar deneyin."
+        : locale === "fr" ? "Le service est actuellement indisponible. Veuillez réessayer plus tard."
+        : locale === "es" ? "El servicio no está disponible ahora. Inténtelo más tarde."
+        : locale === "sq" ? "Shërbimi nuk është i disponueshëm tani. Provoni më vonë."
+        : locale === "ru" ? "Сервис сейчас недоступен. Попробуйте позже."
+        : locale === "uk" ? "Сервіс зараз недоступний. Спробуйте пізніше."
+        : "The service is unavailable right now. Please try again later."
+      );
     }
-  }, [mounted]);
+  }, [mounted, locale]);
 
   async function runUpload(file: File, useNoAi: boolean) {
     const attemptId = beginNewUpload({
@@ -229,6 +246,10 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
         result.filename,
         result.extracted_field_ids,
         attemptId,
+        {
+          supportLevel: result.analysis_report?.support_level ?? null,
+          templateId: result.analysis_report?.template_id ?? null,
+        },
       );
       setPdfToken(result.pdf_token);
       setReport(result.analysis_report ?? null);
@@ -240,12 +261,10 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
       }
 
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Failed to process PDF.";
-      if (msg.includes("422") || msg.toLowerCase().includes("no field")) {
-        setError(t("no_fields", locale));
-      } else {
-        setError(msg);
-      }
+      // Always render a localized, plain-language message.
+      // Never expose backend deployment / API URL / status codes to the user.
+      const { friendlyError } = await import("@/lib/errors");
+      setError(friendlyError(e, locale));
       setStage("error");
     }
   }
@@ -272,7 +291,30 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
 
   return (
     <>
-      <Header />
+      <Header
+        onLogoClick={stage === "processing"
+          ? () => setShowLeaveModal(true)
+          : undefined}
+      />
+      {showLeaveModal && (
+        <ConfirmModal
+          title={locale === "de" ? "Seite verlassen?" : locale === "ar" ? "مغادرة الصفحة؟" : locale === "tr" ? "Sayfadan ayrılınsın mı?" : "Leave page?"}
+          message={locale === "de" ? "Die PDF wird noch verarbeitet. Wenn Sie jetzt gehen, geht der Fortschritt verloren." : locale === "ar" ? "لا يزال ملف PDF قيد المعالجة. إذا غادرت الآن، ستفقد التقدم." : locale === "tr" ? "PDF hâlâ işleniyor. Şimdi ayrılırsanız ilerleme kaybolacak." : "The PDF is still being processed. If you leave now, progress will be lost."}
+          onDismiss={() => setShowLeaveModal(false)}
+          actions={[
+            {
+              label: locale === "de" ? "Trotzdem verlassen" : locale === "ar" ? "المغادرة على أي حال" : locale === "tr" ? "Yine de ayrıl" : "Leave anyway",
+              variant: "danger",
+              onClick: () => { setShowLeaveModal(false); router.push("/"); },
+            },
+            {
+              label: locale === "de" ? "Bleiben" : locale === "ar" ? "البقاء" : locale === "tr" ? "Kal" : "Stay",
+              variant: "primary",
+              onClick: () => setShowLeaveModal(false),
+            },
+          ]}
+        />
+      )}
       <main className="max-w-4xl mx-auto px-4 py-8">
         <StepProgress currentStep={0} />
         <div className="flex items-center justify-between mb-6">
@@ -317,6 +359,43 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
           </div>
         )}
 
+        {/* Continue saved form card */}
+        {stage === "idle" && inputMode === "choose" &&
+          fields.length > 0 && pdfToken &&
+          pdfUploadedAt && (Date.now() - pdfUploadedAt) < 4 * 60 * 60 * 1000 && (
+          <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-2xl flex flex-col sm:flex-row sm:items-center gap-3">
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-blue-900">
+                {locale === "de" ? "Gespeichertes Formular fortsetzen" :
+                 locale === "ar" ? "متابعة النموذج المحفوظ" :
+                 locale === "tr" ? "Kaydedilen forma devam et" :
+                 "Continue saved form"}
+              </p>
+              {currentFilename && (
+                <p className="text-xs text-blue-700 mt-0.5 truncate">{currentFilename}</p>
+              )}
+              {lastSavedAt && (
+                <p className="text-xs text-blue-500 mt-0.5">
+                  {locale === "de" ? "Gespeichert" :
+                   locale === "ar" ? "تم الحفظ" :
+                   locale === "tr" ? "Kaydedildi" :
+                   "Saved"}{" "}
+                  {new Date(lastSavedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                </p>
+              )}
+            </div>
+            <button
+              onClick={() => router.push(`/${locale}/questions`)}
+              className="flex-shrink-0 px-4 py-2 bg-blue-600 text-white text-sm font-semibold rounded-xl hover:bg-blue-700 transition-colors"
+            >
+              {locale === "de" ? "Weiter" :
+               locale === "ar" ? "متابعة" :
+               locale === "tr" ? "Devam et" :
+               "Continue"} →
+            </button>
+          </div>
+        )}
+
         {/* Mode selector — shown first in idle state */}
         {stage === "idle" && inputMode === "choose" && (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -337,15 +416,40 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
 
             <button
               onClick={() => router.push(`/${locale}/scan`)}
-              className="flex flex-col items-start gap-3 p-6 bg-white border-2 border-gray-200 rounded-2xl hover:border-brand-400 hover:bg-brand-50 transition-all text-left group"
+              className="relative flex flex-col items-start gap-3 p-6 bg-white border-2 border-gray-200 rounded-2xl hover:border-amber-400 hover:bg-amber-50 transition-all text-left group"
             >
+              <span
+                className="absolute top-3 right-3 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-300 rounded"
+                aria-label="Beta feature"
+              >
+                Beta
+              </span>
               <span className="text-3xl">📷</span>
               <div>
-                <p className="text-lg font-semibold text-gray-900 group-hover:text-brand-700">
+                <p className="text-lg font-semibold text-gray-900 group-hover:text-amber-700">
                   {locale === "de" ? "Dokument scannen" : locale === "ar" ? "مسح المستند" : locale === "tr" ? "Belge tara" : "Scan document"}
                 </p>
                 <p className="text-sm text-gray-500 mt-1">
                   {locale === "de" ? "Papierformular mit der Kamera Seite für Seite scannen." : locale === "ar" ? "امسح نموذجًا ورقيًا بالكاميرا صفحةً بصفحة." : locale === "tr" ? "Kameranızla kağıt formu sayfa sayfa tarayın." : "Use your camera to scan a paper form page by page."}
+                </p>
+                <p className="text-xs text-amber-700 mt-2 font-medium">
+                  ⚠ {locale === "de"
+                      ? "Scan ist experimentell und funktioniert möglicherweise nicht auf allen Geräten."
+                      : locale === "ar"
+                      ? "المسح تجريبي وقد لا يعمل على جميع الأجهزة."
+                      : locale === "tr"
+                      ? "Tarama deneyseldir ve tüm cihazlarda çalışmayabilir."
+                      : locale === "fr"
+                      ? "Le scan est expérimental et peut ne pas fonctionner sur tous les appareils."
+                      : locale === "es"
+                      ? "El escaneo es experimental y puede no funcionar en todos los dispositivos."
+                      : locale === "sq"
+                      ? "Skanimi është eksperimental dhe mund të mos funksionojë në të gjitha pajisjet."
+                      : locale === "ru"
+                      ? "Сканирование экспериментальное и может работать не на всех устройствах."
+                      : locale === "uk"
+                      ? "Сканування експериментальне і може працювати не на всіх пристроях."
+                      : "Scanning is experimental and may not work on all devices."}
                 </p>
               </div>
             </button>
@@ -362,7 +466,12 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
             </button>
             <FileDropzone
               onFileSelected={handleFileSelected}
-              onError={(msg) => { setError(msg); setStage("error"); }}
+              onError={async (msg) => {
+                console.error("[upload] dropzone error:", msg);
+                const { errorMessage } = await import("@/lib/errors");
+                setError(errorMessage("unknown", locale));
+                setStage("error");
+              }}
               isProcessing={false}
               uploadLabel={t("instr", locale)}
               supportedLabel={t("supported", locale)}

@@ -108,6 +108,7 @@ class PyPDFGenerator(PDFGeneratorService):
             pdf_bytes=buffer.getvalue(),
             field_count_filled=filled,
             warnings=warnings,
+            strategy="acroform",
         )
 
     async def _overlay_fallback(
@@ -136,6 +137,7 @@ class PyPDFGenerator(PDFGeneratorService):
                 pdf_bytes=b"%PDF-1.4",
                 field_count_filled=0,
                 warnings=warnings,
+                strategy="minimal",
             )
 
         labels = request.field_labels  # field_id → label (may be empty)
@@ -238,6 +240,7 @@ class PyPDFGenerator(PDFGeneratorService):
             pdf_bytes=buffer.getvalue(),
             field_count_filled=filled,
             warnings=warnings,
+            strategy="summary",
         )
 
 

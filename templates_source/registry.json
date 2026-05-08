@@ -1,0 +1,16 @@
+{
+  "$schema_version": "1.0",
+  "$comment": "Source-PDF registry for verified templates. Updated by hand when new templates are added or source PDFs change. The version-monitor service compares live source URLs against these hashes.",
+  "templates": {
+    "jobcenter_but_v1": {
+      "name": "Jobcenter — Antrag auf Leistungen für Bildung und Teilhabe",
+      "source_url": null,
+      "source_pdf": null,
+      "sha256": null,
+      "version_label": "Stand: 2024",
+      "added_at": "2026-05-07",
+      "owner": "team-bh",
+      "notes": "Source PDF not yet vendored into repo. Run `tools/template_author hash <path>` after committing the PDF and update sha256."
+    }
+  }
+}

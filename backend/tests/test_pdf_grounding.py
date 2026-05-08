@@ -19,7 +19,15 @@ import pytest
 
 # ── 1. Field-type classifier ──────────────────────────────────────────────────
 
-from app.api.v1.documents import _acroform_field_type, _FF_RADIO, _FF_PUSHBUTTON, _FF_MULTISELECT
+# Functions previously lived in app.api.v1.documents but were moved into
+# app.services.pdf_pipeline as part of the stateless-pipeline refactor.
+# Aliasing keeps the test body unchanged.
+from app.services.pdf_pipeline import (
+    _classify_field_type as _acroform_field_type,
+    _FF_RADIO,
+    _FF_PUSHBUTTON,
+    _FF_MULTISELECT,
+)
 
 
 @pytest.mark.parametrize("ft,flags,expected", [
@@ -39,7 +47,9 @@ def test_field_type_classifier(ft, flags, expected):
 
 # ── 2. No hallucinated questions (every field has a PDF source key) ───────────
 
-from app.api.v1.documents import _extract_acroform_fields
+# Renamed (and made public) during the stateless-pipeline refactor.
+# Now returns FieldMapEntry dataclasses (not dicts); see attribute-access below.
+from app.services.pdf_pipeline import extract_acroform_fields as _extract_acroform_fields
 
 
 def _make_minimal_acroform_pdf() -> bytes:
@@ -120,10 +130,11 @@ def test_extraction_returns_only_acroform_fields():
     # We expect at least the Vorname text field; Familienstand radio may or may not
     # parse correctly from this minimal PDF — but we NEVER get invented fields.
     for f in fields:
-        assert f["field_name"] != "", "Empty field name — parser returned a garbage entry"
-        assert f["field_type"] in (
+        # Attribute access — extract_acroform_fields now returns FieldMapEntry.
+        assert f.field_id != "", "Empty field name — parser returned a garbage entry"
+        assert f.field_type in (
             "text", "date", "radio", "checkbox", "select", "multiselect", "signature"
-        ), f"Unknown field_type: {f['field_type']}"
+        ), f"Unknown field_type: {f.field_type}"
 
 
 def test_extraction_returns_empty_for_non_pdf():
@@ -203,7 +214,7 @@ def test_choice_types_constant():
 
 # ── 5. Radio option extraction (field-tree, not page walk) ───────────────────
 
-from app.api.v1.documents import _radio_options_from_kids
+from app.services.pdf_pipeline import _radio_options_from_kids
 
 
 def test_radio_options_from_empty_kids():
@@ -241,7 +252,30 @@ def test_checkbox_normalisation(raw_value, expected_pdf_value):
 
 # ── 7. Grounding invariant: every question has a PDF source key ───────────────
 
-from app.api.v1.documents import _build_field_defs
+# `_build_field_defs(extracted_dicts, translations, prefilled, ul, dl, confidence)`
+# was the legacy entry point. The stateless pipeline replaced it with
+# `field_map_to_defs(field_map, validated_translations, prefilled, ul, dl)`,
+# which takes FieldMapEntry instances and reads confidence per-field.
+# The shim below preserves the old test signatures while exercising the new API.
+from app.services.pdf_pipeline import FieldMapEntry, field_map_to_defs
+
+
+def _build_field_defs(extracted, translations, prefilled, user_lang, doc_lang, confidence=1.0):
+    field_map = [
+        FieldMapEntry(
+            field_id=e["field_name"],
+            original_label=e.get("original_label", e["field_name"]),
+            field_type=e["field_type"],
+            source_page=1,
+            options=list(e.get("options", [])),
+            current_value=e.get("current_value", ""),
+            confidence=confidence,
+            source="acroform",
+            source_text=e.get("original_label", e["field_name"]),
+        )
+        for e in extracted
+    ]
+    return field_map_to_defs(field_map, translations, prefilled, user_lang, doc_lang)
 
 
 def test_build_field_defs_uses_only_extracted_field_names():
@@ -275,9 +309,14 @@ def test_build_field_defs_uses_only_extracted_field_names():
 
 
 def test_build_field_defs_confidence_flags():
-    """Fields with confidence < 0.6 must have needs_review = True."""
+    """
+    The stateless pipeline uses two thresholds (CONF_SHOW_MIN=0.70,
+    CONF_REVIEW_MIN=0.90) where the legacy single-threshold test used 0.6.
+    Fields in [0.70, 0.90) must be shown but flagged needs_review=True;
+    fields >= 0.90 are shown without the flag.
+    """
     extracted = [{"field_name": "SomeField", "field_type": "text", "current_value": "", "options": [], "original_label": "SomeField"}]
-    defs_low  = _build_field_defs(extracted, {}, set(), "en", "de", confidence=0.4)
-    defs_high = _build_field_defs(extracted, {}, set(), "en", "de", confidence=1.0)
-    assert defs_low[0].needs_review  is True
-    assert defs_high[0].needs_review is False
+    defs_review = _build_field_defs(extracted, {}, set(), "en", "de", confidence=0.75)
+    defs_high   = _build_field_defs(extracted, {}, set(), "en", "de", confidence=1.0)
+    assert defs_review[0].needs_review is True
+    assert defs_high[0].needs_review   is False

@@ -4,8 +4,11 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Header } from "@/components/layout/Header";
 import { StepProgress } from "@/components/layout/StepProgress";
+import { ConfirmModal } from "@/components/layout/ConfirmModal";
 import { useCaseStore } from "@/store/caseStore";
 import { api } from "@/lib/api";
+import { resolveQuestionText } from "@/lib/labelUtils";
+import { OutputGuarantee } from "@/components/questions/OutputGuarantee";
 
 const T: Record<string, Record<string, string>> = {
   title:         { en: "Review your answers", ar: "راجع إجاباتك", tr: "Cevaplarınızı inceleyin", de: "Antworten überprüfen" },
@@ -16,6 +19,16 @@ const T: Record<string, Record<string, string>> = {
   no_token:      { en: "PDF session expired. Please re-upload your document.", ar: "انتهت الجلسة. يرجى رفع المستند مرة أخرى.", tr: "Oturum süresi doldu. Lütfen belgeyi tekrar yükleyin.", de: "Sitzung abgelaufen. Bitte Dokument erneut hochladen." },
   start_new:     { en: "Start a new form", ar: "ابدأ استمارة جديدة", tr: "Yeni form başlat", de: "Neues Formular starten" },
   manual_fields: { en: "Must be filled in manually after printing:", ar: "يجب ملؤها يدويًا بعد الطباعة:", tr: "Yazdırdıktan sonra manuel doldurulmalı:", de: "Nach dem Drucken manuell ausfüllen:" },
+  no_answers:    { en: "Please answer the questions first.", ar: "يرجى الإجابة على الأسئلة أولاً.", tr: "Lütfen önce soruları yanıtlayın.", de: "Bitte beantworten Sie zuerst die Fragen.", fr: "Veuillez d'abord répondre aux questions.", es: "Por favor, responda primero las preguntas.", sq: "Ju lutemi përgjigjuni pyetjeve së pari.", ru: "Пожалуйста, сначала ответьте на вопросы.", uk: "Будь ласка, спочатку дайте відповіді на питання." },
+  save_btn:      { en: "Save for later", ar: "حفظ لوقت لاحق", tr: "Sonra devam et", de: "Speichern" },
+  saved_msg:     { en: "Saved on this device.", ar: "تم الحفظ على هذا الجهاز.", tr: "Bu cihaza kaydedildi.", de: "Auf diesem Gerät gespeichert." },
+  saved_warn:    { en: "Only saved locally — do not use on a shared computer.", ar: "محفوظ محليًا فقط.", tr: "Yalnızca yerel olarak kaydedildi.", de: "Nur lokal gespeichert — nicht auf einem gemeinsam genutzten Computer verwenden." },
+  new_doc_btn:   { en: "New document", ar: "مستند جديد", tr: "Yeni belge", de: "Neues Dokument" },
+  modal_title:   { en: "Start a new document?", ar: "بدء مستند جديد؟", tr: "Yeni bir belge?", de: "Neues Dokument starten?" },
+  modal_msg:     { en: "Your current answers will be lost. Click \"Save for later\" first if you want to return to this form.", ar: "ستُفقد إجاباتك الحالية. انقر على «حفظ» أولاً إذا كنت تريد العودة.", tr: "Mevcut yanitlariniz kaybolacak. Once \"Kaydet\" dugmesine tiklayin.", de: "Ihre aktuellen Antworten gehen verloren. Speichern Sie zuerst, wenn Sie spaeter zurueckkehren moechten." },
+  save_first:    { en: "Save first, then start new", ar: "احفظ أولاً ثم ابدأ", tr: "Önce kaydet, sonra başla", de: "Erst speichern, dann neu" },
+  start_new_btn: { en: "Start new (don't save)", ar: "ابدأ جديداً (بدون حفظ)", tr: "Kaydetmeden başla", de: "Neu starten (nicht speichern)" },
+  cancel:        { en: "Cancel", ar: "إلغاء", tr: "İptal", de: "Abbrechen" },
   disclaimer:    {
     en: "⚠️ This is a form completion tool only. We provide no legal advice. Please verify all information before submitting.",
     ar: "⚠️ هذه أداة لمساعدتك في تعبئة الاستمارات فقط. لا نقدم أي استشارات قانونية.",
@@ -31,13 +44,15 @@ function t(key: string, locale: string) {
 export default function ReviewPage({ params }: { params: { locale: string } }) {
   const { locale } = params;
   const router = useRouter();
-  const { fields, answeredValues, pdfToken, reset } = useCaseStore();
-  const [mounted, setMounted]       = useState(false);
-  const [generating, setGenerating] = useState(false);
-  const [error, setError]           = useState<string | null>(null);
-  const [done, setDone]             = useState(false);
-  const [notFillable, setNotFillable] = useState<string[]>([]);
-  const [fillStrategy, setFillStrategy] = useState<string>("");
+  const { fields, answeredValues, pdfToken, extractedFieldIds, reset, markSaved, clearCurrentDocument, supportLevel } = useCaseStore();
+  const [mounted, setMounted]             = useState(false);
+  const [generating, setGenerating]       = useState(false);
+  const [error, setError]                 = useState<string | null>(null);
+  const [done, setDone]                   = useState(false);
+  const [notFillable, setNotFillable]     = useState<string[]>([]);
+  const [fillStrategy, setFillStrategy]   = useState<string>("");
+  const [showNewDocModal, setShowNewDocModal] = useState(false);
+  const [saveMsg, setSaveMsg]             = useState<string | null>(null);
 
   useEffect(() => { setMounted(true); }, []);
 
@@ -49,18 +64,35 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
 
   if (!mounted) return null;
 
-  const safeFields  = fields ?? [];
-  const safeAnswers = answeredValues ?? {};
+  const safeFields    = fields ?? [];
+  const safeAnswers   = answeredValues ?? {};
+  const safeExtracted = extractedFieldIds ?? [];
+
+  const groundedFields   = safeExtracted.length > 0
+    ? safeFields.filter(f => safeExtracted.includes(f.key))
+    : [];
+  const questionFields   = groundedFields.filter(f => f.show_question !== false && !f.is_prefilled);
+  const unansweredFields = questionFields.filter(f => safeAnswers[f.key] === undefined);
 
   const answeredList = safeFields
     .filter((f) => safeAnswers[f.key] !== undefined)
     .map((f) => ({
-      key:      f.key,
-      label:    f.question[locale] ?? f.question["en"] ?? f.original_label,
+      key:       f.key,
+      label:     resolveQuestionText(f.question, f.original_label, f.key, locale),
       origLabel: f.original_label,
-      value:    safeAnswers[f.key],
+      value:     safeAnswers[f.key],
       inputType: f.input_type,
     }));
+
+  function handleSave() {
+    markSaved();
+    setSaveMsg(`${t("saved_msg", locale)} ${t("saved_warn", locale)}`);
+  }
+
+  function handleStartNew() {
+    clearCurrentDocument();
+    router.push(`/${locale}/upload`);
+  }
 
   async function handleGenerate() {
     if (!pdfToken) {
@@ -68,7 +100,7 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
       return;
     }
     if (Object.keys(safeAnswers).length === 0) {
-      setError("No answers to fill. Please answer the questions first.");
+      setError(t("no_answers", locale));
       return;
     }
     setGenerating(true);
@@ -79,7 +111,6 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
 
       const { blob, notFillable: nf, strategy } = await api.fillPdf(pdfToken, safeAnswers, fieldLabels);
 
-      // Resolve not-fillable field IDs back to original German labels
       const nfLabels = nf.map((id) => {
         const field = safeFields.find((f) => f.key === id);
         return field?.original_label ?? id;
@@ -95,18 +126,48 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
       URL.revokeObjectURL(url);
       setDone(true);
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Failed to generate PDF.";
-      if (msg.includes("401") || msg.toLowerCase().includes("expired")) {
-        setError(t("no_token", locale));
-      } else {
-        setError(msg);
-      }
+      // Always render a localized, plain-language message.
+      // Never expose backend deployment / API URL / status codes to the user.
+      const { friendlyError } = await import("@/lib/errors");
+      setError(friendlyError(e, locale));
     } finally {
       setGenerating(false);
     }
   }
 
   if (done) {
+    // iOS detection: Safari/Chrome/Firefox on iPhone or iPad all share the
+    // "files saved via Share → Save to Files" pattern. Includes iPadOS 13+
+    // which reports macOS userAgent — check touch points as a tie-breaker.
+    const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
+    const maxTouch = typeof navigator !== "undefined" ? (navigator as Navigator & { maxTouchPoints?: number }).maxTouchPoints ?? 0 : 0;
+    const isIOS =
+      /iPhone|iPad|iPod/i.test(ua) ||
+      (/Macintosh/i.test(ua) && maxTouch > 1);
+    const IOS_TITLE: Record<string, string> = {
+      en: "On iPhone or iPad",
+      de: "Auf iPhone oder iPad",
+      fr: "Sur iPhone ou iPad",
+      ar: "على iPhone أو iPad",
+      tr: "iPhone veya iPad'de",
+      sq: "Në iPhone ose iPad",
+      es: "En iPhone o iPad",
+      fa: "روی iPhone یا iPad",
+      ru: "На iPhone или iPad",
+      uk: "На iPhone або iPad",
+    };
+    const IOS_BODY: Record<string, string> = {
+      en: "Tap the Share button, then choose Save to Files to keep your completed PDF on this device.",
+      de: "Tippen Sie auf das Teilen-Symbol und wählen Sie In Dateien sichern, um Ihre PDF auf diesem Gerät zu speichern.",
+      fr: "Appuyez sur le bouton Partager, puis choisissez Enregistrer dans Fichiers pour conserver le PDF sur cet appareil.",
+      ar: "اضغط على زر المشاركة، ثم اختر حفظ في الملفات للاحتفاظ بملف PDF على هذا الجهاز.",
+      tr: "Paylaş düğmesine dokunun, sonra Dosyalar'a Kaydet seçeneğini seçin.",
+      sq: "Prekni butonin Ndaj, pastaj zgjidhni Ruaj në Skedarë për të mbajtur PDF-në në këtë pajisje.",
+      es: "Toque el botón Compartir y luego elija Guardar en Archivos para conservar el PDF en este dispositivo.",
+      fa: "روی دکمه اشتراک‌گذاری ضربه بزنید، سپس Save to Files را انتخاب کنید.",
+      ru: "Нажмите кнопку Поделиться, затем выберите Сохранить в Файлы.",
+      uk: "Натисніть кнопку Поділитися, потім виберіть Зберегти у Файли.",
+    };
     return (
       <>
         <Header />
@@ -126,6 +187,23 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
               {locale === "de" ? "Bitte beim Jobcenter einreichen." : "Please submit it to the Jobcenter."}
             </p>
           </div>
+
+          {isIOS && (
+            <div
+              data-testid="ios-save-instructions"
+              className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-xl flex items-start gap-3"
+            >
+              <span className="text-2xl leading-none mt-0.5" aria-hidden>📲</span>
+              <div className="flex-1 min-w-0">
+                <p className="text-blue-900 font-semibold text-sm mb-1">
+                  {IOS_TITLE[locale] ?? IOS_TITLE.en}
+                </p>
+                <p className="text-blue-800 text-sm leading-relaxed">
+                  {IOS_BODY[locale] ?? IOS_BODY.en}
+                </p>
+              </div>
+            </div>
+          )}
 
           {notFillable.length > 0 && (
             <div className="mb-6 p-4 bg-amber-50 border border-amber-300 rounded-xl">
@@ -160,6 +238,29 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
       <Header />
       <main className="max-w-2xl mx-auto px-4 py-8">
         <StepProgress currentStep={2} />
+
+        {/* Action bar */}
+        <div className="flex items-center justify-between gap-3 mb-5">
+          <button
+            onClick={() => setShowNewDocModal(true)}
+            className="text-sm text-gray-500 hover:text-gray-800 font-medium transition-colors"
+          >
+            ← {t("new_doc_btn", locale)}
+          </button>
+          <button
+            onClick={handleSave}
+            className="px-4 py-2 bg-green-600 text-white text-sm font-semibold rounded-xl hover:bg-green-700 transition-colors"
+          >
+            {t("save_btn", locale)}
+          </button>
+        </div>
+
+        {saveMsg && (
+          <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-xl text-green-800 text-sm">
+            {saveMsg}
+          </div>
+        )}
+
         <h1 className="text-2xl font-bold text-gray-900 mb-2">{t("title", locale)}</h1>
         <p className="text-gray-500 mb-6">{t("instr", locale)}</p>
 
@@ -204,6 +305,46 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
           )}
         </div>
 
+        {/* Missing answers warning */}
+        {unansweredFields.length > 0 && (
+          <div className="mb-6 p-4 bg-amber-50 border border-amber-300 rounded-xl">
+            <p className="text-amber-800 text-sm font-semibold mb-3">
+              {locale === "de"
+                ? `⚠ ${unansweredFields.length} Frage${unansweredFields.length !== 1 ? "n" : ""} noch nicht beantwortet`
+                : locale === "ar"
+                ? `⚠ ${unansweredFields.length} سؤال لم تتم الإجابة عنه بعد`
+                : locale === "tr"
+                ? `⚠ ${unansweredFields.length} soru henüz yanıtlanmadı`
+                : `⚠ ${unansweredFields.length} question${unansweredFields.length !== 1 ? "s" : ""} not answered yet`}
+            </p>
+            <div className="space-y-2">
+              {unansweredFields.map((f) => {
+                const qText = resolveQuestionText(f.question, f.original_label, f.key, locale);
+                const globalIdx = questionFields.findIndex(q => q.key === f.key) + 1;
+                return (
+                  <div key={f.key} className="flex items-center justify-between gap-3 bg-white rounded-lg px-3 py-2 border border-amber-200">
+                    <div className="flex-1 min-w-0">
+                      <span className="text-xs text-amber-600 font-mono mr-2">{globalIdx}.</span>
+                      <span className="text-sm text-gray-800">{qText}</span>
+                      {f.original_label !== qText && (
+                        <span className="block text-xs text-gray-400 mt-0.5 ml-5">{f.original_label}</span>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => router.push(`/${locale}/questions?focus=${f.key}`)}
+                      className="flex-shrink-0 px-3 py-1.5 bg-amber-600 text-white text-xs rounded-lg font-medium hover:bg-amber-700 transition-colors"
+                    >
+                      {locale === "de" ? "Antworten" : locale === "ar" ? "أجب" : locale === "tr" ? "Yanıtla" : "Answer"}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        <OutputGuarantee supportLevel={supportLevel} locale={locale} />
+
         <div className="flex flex-col gap-3">
           <button
             onClick={handleGenerate}
@@ -224,6 +365,31 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
           <p className="text-amber-800 text-sm leading-relaxed">{t("disclaimer", locale)}</p>
         </div>
       </main>
+
+      {showNewDocModal && (
+        <ConfirmModal
+          title={t("modal_title", locale)}
+          message={t("modal_msg", locale)}
+          onDismiss={() => setShowNewDocModal(false)}
+          actions={[
+            {
+              label: t("save_first", locale),
+              variant: "primary",
+              onClick: () => { handleSave(); handleStartNew(); },
+            },
+            {
+              label: t("start_new_btn", locale),
+              variant: "danger",
+              onClick: handleStartNew,
+            },
+            {
+              label: t("cancel", locale),
+              variant: "secondary",
+              onClick: () => setShowNewDocModal(false),
+            },
+          ]}
+        />
+      )}
     </>
   );
 }

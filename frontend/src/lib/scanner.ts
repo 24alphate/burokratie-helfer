@@ -74,13 +74,13 @@ export function loadOpenCV(): Promise<any> {
       };
       document.head.appendChild(script);
 
-      // Hard timeout after 60 s
+      // Hard timeout after 10 s
       setTimeout(() => {
         if (!resolved) {
           _loadPromise = null;
-          reject(new Error("OpenCV.js load timeout after 60 s"));
+          reject(new Error("OpenCV.js load timeout after 10 s"));
         }
-      }, 60_000);
+      }, 10_000);
     });
   }
 

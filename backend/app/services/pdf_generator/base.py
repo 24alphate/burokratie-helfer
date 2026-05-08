@@ -15,6 +15,13 @@ class PDFGenerationResult:
     pdf_bytes: bytes
     field_count_filled: int
     warnings: list[str] = field(default_factory=list)
+    # Phase E/E1 — generator self-reports the path it actually took so
+    # fill_pdf can enforce Level 2's "no silent summary fallback" promise.
+    # Values:
+    #   "acroform" — _fill_acroform succeeded with field_count_filled > 0
+    #   "summary"  — _overlay_fallback was used (reportlab answer summary)
+    #   "minimal"  — no reportlab installed; minimal placeholder PDF returned
+    strategy: str = "summary"
 
 
 class PDFGeneratorService(ABC):

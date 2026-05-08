@@ -1,12 +1,13 @@
 "use client";
 
-import { QuestionRead } from "@/types/api";
-import { FieldOption } from "@/types/api";
+import { QuestionRead, FieldOption, GuidanceText } from "@/types/api";
+import { resolveQuestionText } from "@/lib/labelUtils";
 import { TextInput } from "./TextInput";
 import { DateInput } from "./DateInput";
 import { SelectInput } from "./SelectInput";
 import { YesNoInput } from "./YesNoInput";
 import { RadioInput } from "./RadioInput";
+import { GuidancePanel } from "./GuidancePanel";
 
 interface QuestionCardProps {
   question: QuestionRead;
@@ -15,9 +16,11 @@ interface QuestionCardProps {
   isLoading: boolean;
   validationErrors: string[];
   submitLabel: string;
-  options?: FieldOption[];      // radio/select/checkbox options from FieldDefinition
-  needsReview?: boolean;        // low-confidence vision field
-  originalLabel?: string;       // label as it appears in the document
+  options?: FieldOption[];
+  needsReview?: boolean;
+  originalLabel?: string;
+  fieldKey?: string;
+  guidance?: GuidanceText | null;
 }
 
 export function QuestionCard({
@@ -29,10 +32,16 @@ export function QuestionCard({
   submitLabel,
   options = [],
   needsReview = false,
-  originalLabel,
+  originalLabel = "",
+  fieldKey = "",
+  guidance,
 }: QuestionCardProps) {
-  const questionText   = question.question_text[locale] ?? question.question_text["en"] ?? "";
-  const explanationText = question.explanation_text[locale] ?? question.explanation_text["en"] ?? "";
+  const questionText = resolveQuestionText(question.question_text, originalLabel, fieldKey, locale);
+  const explanationText =
+    question.explanation_text?.[locale] ||
+    question.explanation_text?.["en"] ||
+    question.explanation_text?.["de"] ||
+    "";
 
   const progressPct = question.total_count > 0
     ? Math.round((question.answered_count / question.total_count) * 100)
@@ -66,8 +75,10 @@ export function QuestionCard({
 
       <h2 className="text-xl font-semibold text-gray-900 mb-2">{questionText}</h2>
       {explanationText && (
-        <p className="text-sm text-gray-500 mb-6 leading-relaxed">{explanationText}</p>
+        <p className="text-sm text-gray-500 mb-2 leading-relaxed">{explanationText}</p>
       )}
+
+      {guidance && <GuidancePanel guidance={guidance} locale={locale} />}
 
       {validationErrors.length > 0 && (
         <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">

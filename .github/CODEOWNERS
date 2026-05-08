@@ -1,0 +1,31 @@
+# CODEOWNERS — assigns review responsibility for verified-template changes.
+#
+# Per Section 21 (Hard Rules) of the implementation plan: every template
+# requires (1) a code reviewer + (2) a form-domain reviewer before merge.
+# This file routes the code-reviewer half automatically. The form-domain
+# reviewer must be added by the PR author from the form's owner team.
+
+# Verified-template framework (the core engine) — engineering review
+/burokratie-helfer/backend/app/services/form_templates/__init__.py    @team-bh
+/burokratie-helfer/backend/app/services/pdf_pipeline.py               @team-bh
+/burokratie-helfer/backend/app/api/v1/process_pdf.py                  @team-bh
+/burokratie-helfer/backend/app/api/v1/fill_pdf.py                     @team-bh
+/burokratie-helfer/backend/app/api/v1/templates.py                    @team-bh
+
+# Per-template files — owned by the template's domain team.
+# Add one line per template as templates are added.
+/burokratie-helfer/backend/app/services/form_templates/jobcenter_but.py    @team-bh
+# /burokratie-helfer/backend/app/services/form_templates/wohngeld.py        @team-bh
+# /burokratie-helfer/backend/app/services/form_templates/kindergeld.py      @team-bh
+
+# Verified-question content — translation review required for any change
+/burokratie-helfer/backend/app/services/verified_questions.py         @team-bh
+
+# Source PDFs — version-monitor service depends on hash stability
+/burokratie-helfer/templates_source/                                   @team-bh
+
+# Tooling — engineering review
+/burokratie-helfer/tools/                                              @team-bh
+
+# CI/CD — engineering review
+/.github/                                                              @team-bh

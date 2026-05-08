@@ -5,28 +5,50 @@ import { useRouter } from "next/navigation";
 import { Header } from "@/components/layout/Header";
 import { StepProgress } from "@/components/layout/StepProgress";
 import { QuestionCard } from "@/components/questions/QuestionCard";
+import { QuestionOverview } from "@/components/questions/QuestionOverview";
+import { ConfirmModal } from "@/components/layout/ConfirmModal";
+import { SupportLevelBanner } from "@/components/questions/SupportLevelBanner";
+import { ReviewWarning } from "@/components/questions/ReviewWarning";
+import { DeleteSavedData } from "@/components/layout/DeleteSavedData";
+import { PrivacyNote } from "@/components/layout/PrivacyNote";
 import { useCaseStore } from "@/store/caseStore";
 import { api } from "@/lib/api";
-import { AnalysisReport, QuestionRead } from "@/types/api";
+import { AnalysisReport, QuestionRead, FieldDefinition } from "@/types/api";
+import { cleanHumanLabel } from "@/lib/labelUtils";
 
 const LOADING: Record<string, string> = {
-  en: "Reading your document…", ar: "جارٍ قراءة مستندك…",
-  tr: "Belgeniz okunuyor…", de: "Dokument wird gelesen…",
+  en: "Reading your document…", de: "Dokument wird gelesen…",
+  ar: "جارٍ قراءة مستندك…", tr: "Belgeniz okunuyor…",
+  fr: "Lecture de votre document…", es: "Leyendo su documento…",
+  sq: "Duke lexuar dokumentin tuaj…", ru: "Чтение документа…",
+  uk: "Читання документа…", fa: "در حال خواندن سند شما…",
 };
 const SUBMIT: Record<string, string> = {
-  en: "Next →", ar: "التالي →", tr: "İleri →", de: "Weiter →",
+  en: "Next →", de: "Weiter →", ar: "التالي →", tr: "İleri →",
+  fr: "Suivant →", es: "Siguiente →", sq: "Tjetër →",
+  ru: "Далее →", uk: "Далі →", fa: "بعدی →",
 };
 const PREFILL_BANNER: Record<string, (n: number) => string> = {
   en: (n) => `✓ ${n} field${n !== 1 ? "s" : ""} were read from your document and pre-filled.`,
+  de: (n) => `✓ ${n} Feld${n !== 1 ? "er" : ""} wurden aus Ihrem Dokument gelesen und vorausgefüllt.`,
   ar: (n) => `✓ تم قراءة ${n} حقل من مستندك وتعبئته تلقائياً.`,
   tr: (n) => `✓ ${n} alan belgenizden okunarak otomatik dolduruldu.`,
-  de: (n) => `✓ ${n} Feld${n !== 1 ? "er" : ""} wurden aus Ihrem Dokument gelesen und vorausgefüllt.`,
+  fr: (n) => `✓ ${n} champ${n !== 1 ? "s" : ""} ont été lus depuis votre document et pré-remplis.`,
+  es: (n) => `✓ ${n} campo${n !== 1 ? "s" : ""} fueron leídos de su documento y pre-rellenados.`,
+  sq: (n) => `✓ ${n} fushë u lexuan nga dokumenti juaj dhe u plotësuan automatikisht.`,
+  ru: (n) => `✓ ${n} поле${n !== 1 ? "й" : ""} прочитано из вашего документа и предзаполнено.`,
+  uk: (n) => `✓ ${n} пол${n !== 1 ? "і" : "е"} прочитано з вашого документа і попередньо заповнено.`,
 };
 const BLOCKED_BANNER: Record<string, (n: number) => string> = {
   en: (n) => `ℹ ${n} field${n !== 1 ? "s" : ""} could not be verified (low confidence) and were excluded.`,
+  de: (n) => `ℹ ${n} Feld${n !== 1 ? "er" : ""} konnten nicht verifiziert werden und wurden ausgeschlossen.`,
   ar: (n) => `ℹ ${n} حقل لم يمكن التحقق منه واستُبعد.`,
   tr: (n) => `ℹ ${n} alan doğrulanamadı ve dışlandı.`,
-  de: (n) => `ℹ ${n} Feld${n !== 1 ? "er" : ""} konnten nicht verifiziert werden und wurden ausgeschlossen.`,
+  fr: (n) => `ℹ ${n} champ${n !== 1 ? "s" : ""} n'ont pas pu être vérifiés et ont été exclus.`,
+  es: (n) => `ℹ ${n} campo${n !== 1 ? "s" : ""} no pudieron ser verificados y fueron excluidos.`,
+  sq: (n) => `ℹ ${n} fushë nuk mund të verifikoheshin dhe u përjashtuan.`,
+  ru: (n) => `ℹ ${n} пол${n !== 1 ? "я" : "е"} не могло быть проверено и было исключено.`,
+  uk: (n) => `ℹ ${n} пол${n !== 1 ? "і" : "е"} не вдалося перевірити і було виключено.`,
 };
 
 // ── Debug panel ───────────────────────────────────────────────────────────────
@@ -39,11 +61,39 @@ interface DebugPanelProps {
   questionFieldIds: string[];
   blockedByGuard: string[];
   report: AnalysisReport | null | undefined;
+  questionFields: FieldDefinition[];
+  locale: string;
+}
+
+const WEAK_NOUN_PHRASES = new Set([
+  "day", "month", "year", "time", "amount", "number / count", "number", "count",
+  "starting location", "destination", "route / distance", "transportation",
+  "description", "notes / remarks", "reason", "purpose", "we", "yes", "no",
+]);
+
+function isWeakQuestion(q: FieldDefinition, locale: string): boolean {
+  const text = (q.question?.[locale] || q.question?.["en"] || "").trim();
+  if (!text) return true;
+  if (text.startsWith("⚠") || text.toLowerCase().startsWith("translation unavailable")) return true;
+  if (text.toLowerCase() === (q.original_label || "").toLowerCase() && text.length < 30) return true;
+  if (/\s+\d+$/.test(text)) return true;                    // trailing number: "Startort 13"
+  if (text.includes("=")) return true;                      // "Zielort=Startort"
+  if (text.split(" ").length < 4 && !["checkbox", "signature"].includes(q.input_type)) return true;
+  if (WEAK_NOUN_PHRASES.has(text.toLowerCase())) return true; // noun not question
+  return false;
 }
 
 function DebugPanel({
   caseId, documentId, extractedFieldIds, questionFieldIds, blockedByGuard, report,
+  questionFields, locale,
 }: DebugPanelProps) {
+  const weakFields = questionFields.filter(f => isWeakQuestion(f, locale));
+  const goodCount  = questionFields.length - weakFields.length;
+  const sourceCounts = questionFields.reduce<Record<string, number>>((acc, f) => {
+    const src = f.question_source || "unknown";
+    acc[src] = (acc[src] || 0) + 1;
+    return acc;
+  }, {});
   const allGrounded = questionFieldIds.every((id) => extractedFieldIds.includes(id));
   const source = blockedByGuard.length > 0 ? "⛔ UNGROUNDED" : "✅ pdf_field_map";
 
@@ -90,6 +140,39 @@ function DebugPanel({
           <span className={allGrounded ? "text-green-700" : "text-red-600 font-bold"}>
             {allGrounded ? "true" : "FALSE — BUG DETECTED"}
           </span>
+        </div>
+
+        {/* Question quality audit */}
+        <div className={`p-3 rounded ${weakFields.length > 0 ? "bg-amber-50 border border-amber-200" : "bg-green-50 border border-green-200"}`}>
+          <p className="font-semibold mb-1 text-xs">Question quality ({locale})</p>
+          <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-0.5 text-xs">
+            <span className="text-gray-400">total</span><span>{questionFields.length}</span>
+            <span className="text-gray-400">good</span><span className="text-green-700">{goodCount}</span>
+            <span className="text-gray-400">weak</span>
+            <span className={weakFields.length > 0 ? "text-amber-700 font-bold" : "text-green-700"}>{weakFields.length}</span>
+          </div>
+          {weakFields.length > 0 && (
+            <div className="mt-2">
+              <p className="text-amber-700 text-xs font-semibold mb-1">Weak fields:</p>
+              {weakFields.map(f => (
+                <div key={f.key} className="text-xs text-amber-600 font-mono">
+                  [{f.question_source || "?"}] {f.key}: {cleanHumanLabel(f.question?.[locale] || f.original_label || f.key)}
+                </div>
+              ))}
+            </div>
+          )}
+          {Object.keys(sourceCounts).length > 0 && (
+            <div className="mt-2">
+              <p className="text-xs text-gray-500 font-semibold mb-1">Question sources:</p>
+              {Object.entries(sourceCounts).map(([src, n]) => (
+                <div key={src} className="text-xs font-mono text-gray-500">
+                  <span className={src === "verified" ? "text-green-600" : src === "semantic" ? "text-blue-600" : src === "ai" ? "text-purple-600" : src === "deterministic" ? "text-teal-600" : "text-red-500"}>
+                    {src}
+                  </span>: {n}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         <div>
@@ -140,14 +223,28 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
     documentId, extractedFieldIds,
     pdfToken,
     uploadAttemptId, fieldsForUploadAttemptId,
-    answeredKeys, addAnswer,
+    answeredKeys, answeredValues, addAnswer,
+    markSaved, clearCurrentDocument,
+    supportLevel, templateId,
   } = useCaseStore();
-  const [mounted, setMounted] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
+  const [mounted, setMounted]       = useState(false);
+  const [isLoading, setIsLoading]   = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [focusedKey, setFocusedKey] = useState<string | null>(null);
+  const [showNewDocModal, setShowNewDocModal] = useState(false);
+  const [saveMsg, setSaveMsg]       = useState<string | null>(null);
 
   // ALL hooks before any conditional return
   useEffect(() => { setMounted(true); }, []);
+
+  // Read ?focus=<field_key> from URL so the review page can deep-link back here
+  useEffect(() => {
+    if (!mounted) return;
+    try {
+      const key = new URLSearchParams(window.location.search).get("focus");
+      if (key) setFocusedKey(key);
+    } catch { /* ignore */ }
+  }, [mounted]);
 
   useEffect(() => {
     if (mounted && (!sessionToken || !caseId)) router.replace("/");
@@ -266,6 +363,8 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
             questionFieldIds={safeFields.map((f) => f.key)}
             blockedByGuard={safeFields.map((f) => f.key)}
             report={null}
+            questionFields={[]}
+            locale={locale}
           />
         </main>
       </>
@@ -273,6 +372,73 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
   }
 
   if (safeFields.length === 0) {
+    // Level 4: scanned/unknown — backend returned 0 fields by design.
+    // Show an explicit "not supported" screen, not a perpetual "Loading…" spinner.
+    if (supportLevel === 4) {
+      const L4_TITLE: Record<string, string> = {
+        en: "We can't read this document yet",
+        de: "Wir können dieses Dokument noch nicht lesen",
+        fr: "Nous ne pouvons pas encore lire ce document",
+        ar: "لا يمكننا قراءة هذا المستند بعد",
+        tr: "Bu belgeyi henüz okuyamıyoruz",
+        sq: "Nuk mund ta lexojmë këtë dokument ende",
+        es: "Aún no podemos leer este documento",
+        fa: "ما هنوز نمی‌توانیم این سند را بخوانیم",
+        ru: "Мы пока не можем прочитать этот документ",
+        uk: "Ми поки не можемо прочитати цей документ",
+      };
+      const L4_BODY: Record<string, string> = {
+        en: "It looks like a scanned image or photo. Please upload a digital PDF (one you downloaded from a website or generated on a computer).",
+        de: "Es sieht aus wie ein gescanntes Bild oder Foto. Bitte laden Sie eine digitale PDF hoch (von einer Website oder am Computer erstellt).",
+        fr: "Cela ressemble à une image scannée ou une photo. Veuillez téléverser un PDF numérique (téléchargé depuis un site web ou créé sur un ordinateur).",
+        ar: "يبدو أنه صورة ممسوحة ضوئيًا. يرجى تحميل ملف PDF رقمي (تم تنزيله من موقع ويب أو إنشاؤه على جهاز كمبيوتر).",
+        tr: "Bu taranmış bir görüntü veya fotoğraf gibi görünüyor. Lütfen dijital bir PDF yükleyin (bir web sitesinden indirilmiş veya bir bilgisayarda oluşturulmuş).",
+        sq: "Duket si një imazh i skanuar ose fotografi. Ngarkoni një PDF dixhital (i shkarkuar nga një uebsajt ose i krijuar në një kompjuter).",
+        es: "Parece una imagen escaneada o una foto. Suba un PDF digital (descargado de un sitio web o generado en una computadora).",
+        fa: "به نظر می‌رسد این یک تصویر اسکن شده یا عکس است. لطفاً یک PDF دیجیتال آپلود کنید.",
+        ru: "Похоже на отсканированное изображение или фотографию. Загрузите цифровой PDF.",
+        uk: "Це виглядає як сканований документ або фото. Завантажте цифровий PDF.",
+      };
+      const L4_BUTTON: Record<string, string> = {
+        en: "Upload a different PDF",
+        de: "Andere PDF hochladen",
+        fr: "Téléverser un autre PDF",
+        ar: "تحميل ملف PDF آخر",
+        tr: "Başka bir PDF yükle",
+        sq: "Ngarko një PDF tjetër",
+        es: "Subir un PDF diferente",
+        fa: "آپلود PDF دیگر",
+        ru: "Загрузить другой PDF",
+        uk: "Завантажити інший PDF",
+      };
+      const title = L4_TITLE[locale] ?? L4_TITLE.en;
+      const body  = L4_BODY[locale]  ?? L4_BODY.en;
+      const btn   = L4_BUTTON[locale] ?? L4_BUTTON.en;
+      return (
+        <>
+          <Header />
+          <main className="max-w-2xl mx-auto px-4 py-8">
+            <StepProgress currentStep={1} />
+            <SupportLevelBanner supportLevel={4} locale={locale} />
+            <div
+              data-testid="level4-unsupported"
+              className="p-6 bg-white border border-gray-200 rounded-xl text-center"
+            >
+              <div className="text-5xl mb-3" aria-hidden>📄</div>
+              <p className="text-gray-900 font-semibold text-lg mb-2">{title}</p>
+              <p className="text-gray-600 text-sm mb-5 max-w-md mx-auto">{body}</p>
+              <button
+                onClick={() => router.replace(`/${locale}/upload`)}
+                className="px-5 py-2.5 bg-brand-600 text-white rounded-xl text-sm font-medium hover:bg-brand-700"
+              >
+                {btn}
+              </button>
+            </div>
+          </main>
+        </>
+      );
+    }
+
     return (
       <>
         <Header />
@@ -286,42 +452,134 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
     );
   }
 
-  if (!nextField) return null;
+  // currentField: if the user jumped to a specific question use that; otherwise
+  // show the next unanswered one.  focusedKey may point to an already-answered
+  // field (for re-answering) so we don't filter by answered status here.
+  const currentField =
+    (focusedKey ? questionFields.find(f => f.key === focusedKey) : null)
+    ?? nextField;
+
+  const currentIndex = currentField
+    ? questionFields.findIndex(f => f.key === currentField.key) + 1
+    : answeredCount + 1;
+
+  if (!currentField) return null;
 
   const question: QuestionRead = {
-    id: nextField.key,
-    field_key: nextField.key,
-    order_index: nextField.order,
-    input_type: nextField.input_type,
-    question_text: nextField.question,
-    explanation_text: nextField.explanation,
+    id: currentField.key,
+    field_key: currentField.key,
+    order_index: currentField.order,
+    input_type: currentField.input_type,
+    question_text: currentField.question,
+    explanation_text: currentField.explanation,
     options: null,
     answered_count: answeredCount,
     total_count: totalCount,
   };
 
   async function handleAnswer(rawAnswer: string) {
-    if (!nextField) return;
+    if (!currentField) return;
     setIsLoading(true);
     setSubmitError(null);
     try {
-      // Store answer locally for stateless PDF generation.
-      // The backend submitAnswer call is kept for audit purposes but is not critical.
       if (sessionToken && caseId) {
-        api.questions.submitAnswer(sessionToken, caseId, nextField.key, rawAnswer).catch(() => {});
+        api.questions.submitAnswer(sessionToken, caseId, currentField.key, rawAnswer).catch(() => {});
       }
     } finally {
       setIsLoading(false);
     }
-    // addAnswer stores both key (for progress) and value (for fill-pdf).
-    addAnswer(nextField.key, rawAnswer);
+    addAnswer(currentField.key, rawAnswer);
+    // Return to normal sequential flow after answering a jump-to question
+    setFocusedKey(null);
+  }
+
+  // ── Localised labels for buttons (all supported locales) ─────────────────────
+  const LBL = {
+    saveBtn:    { en: "Save for later", de: "Speichern", ar: "حفظ لوقت لاحق", tr: "Sonra devam et", fr: "Enregistrer", es: "Guardar", sq: "Ruaj", ru: "Сохранить", uk: "Зберегти", fa: "ذخیره" },
+    newDocBtn:  { en: "New document", de: "Neues Dokument", ar: "مستند جديد", tr: "Yeni belge", fr: "Nouveau document", es: "Nuevo documento", sq: "Dokument i ri", ru: "Новый документ", uk: "Новий документ", fa: "سند جدید" },
+    savedMsg:   { en: "Saved on this device.", de: "Auf diesem Gerät gespeichert.", ar: "تم الحفظ على هذا الجهاز.", tr: "Bu cihaza kaydedildi.", fr: "Enregistré sur cet appareil.", es: "Guardado en este dispositivo.", sq: "Ruajtur në këtë pajisje.", ru: "Сохранено на этом устройстве.", uk: "Збережено на цьому пристрої.", fa: "در این دستگاه ذخیره شد." },
+    savedWarn:  { en: "Only saved locally — do not use on a shared computer.", de: "Nur lokal gespeichert.", ar: "محفوظ محليًا فقط.", tr: "Yalnızca yerel olarak kaydedildi.", fr: "Enregistré localement uniquement.", es: "Solo guardado localmente.", sq: "Ruajtur vetëm lokalisht.", ru: "Сохранено только локально.", uk: "Збережено лише локально.", fa: "فقط به صورت محلی ذخیره شده." },
+    modalTitle: { en: "Start a new document?", de: "Neues Dokument starten?", ar: "بدء مستند جديد؟", tr: "Yeni bir belge?", fr: "Commencer un nouveau document ?", es: "¿Iniciar un nuevo documento?", sq: "Filloni një dokument të ri?", ru: "Начать новый документ?", uk: "Почати новий документ?", fa: "شروع سند جدید؟" },
+    modalMsg:   { en: "Your current answers will be lost. Save first if you want to return to this form.", de: "Ihre aktuellen Antworten gehen verloren. Speichern Sie zuerst.", ar: "ستُفقد إجاباتك الحالية. احفظ أولاً.", tr: "Mevcut yanitlariniz kaybolacak. Once kaydedin.", fr: "Vos réponses actuelles seront perdues. Enregistrez d'abord.", es: "Sus respuestas actuales se perderán. Guarde primero.", sq: "Pergjigjet tuaja do te humbasin. Ruajeni fillimisht.", ru: "Ваши ответы будут потеряны. Сначала сохраните.", uk: "Ваші відповіді будуть втрачені. Спочатку збережіть.", fa: "پاسخ‌های شما از دست خواهند رفت. ابتدا ذخیره کنید." },
+    saveFirst:  { en: "Save first, then start new", de: "Erst speichern, dann neu", ar: "احفظ أولاً ثم ابدأ", tr: "Önce kaydet, sonra başla", fr: "Enregistrer d'abord, puis nouveau", es: "Guardar primero, luego nuevo", sq: "Ruaj fillimisht, pastaj nis të ri", ru: "Сначала сохранить, затем новый", uk: "Спочатку зберегти, потім новий", fa: "ابتدا ذخیره کنید، سپس جدید" },
+    startNew:   { en: "Start new (don't save)", de: "Neu starten (nicht speichern)", ar: "ابدأ جديداً (بدون حفظ)", tr: "Kaydetmeden basla", fr: "Nouveau (sans enregistrer)", es: "Nuevo (sin guardar)", sq: "Nis te ri (pa ruajtur)", ru: "Новый (без сохранения)", uk: "Новий (без збереження)", fa: "شروع جدید (بدون ذخیره)" },
+    cancel:     { en: "Cancel", de: "Abbrechen", ar: "إلغاء", tr: "Iptal", fr: "Annuler", es: "Cancelar", sq: "Anulo", ru: "Отмена", uk: "Скасувати", fa: "لغو" },
+    continueNow:{ en: "Continue answering", de: "Weiter ausfüllen", ar: "تابع الإجابة", tr: "Yanitlamaya devam et", fr: "Continuer", es: "Continuar respondiendo", sq: "Vazhdo te pergjigjesh", ru: "Продолжить отвечать", uk: "Продовжити відповідати", fa: "ادامه پاسخ‌دهی" },
+  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const lbl = (k: keyof typeof LBL): string => (LBL[k] as any)[locale] ?? (LBL[k] as any)["en"];
+
+  function handleSave() {
+    markSaved();
+    setSaveMsg(lbl("savedMsg") + " " + lbl("savedWarn"));
+  }
+  function handleStartNew() {
+    clearCurrentDocument();
+    router.push(`/${locale}/upload`);
   }
 
   return (
     <>
+      {showNewDocModal && (
+        <ConfirmModal
+          title={lbl("modalTitle")}
+          message={lbl("modalMsg")}
+          onDismiss={() => setShowNewDocModal(false)}
+          actions={[
+            {
+              label: lbl("saveFirst"), variant: "primary",
+              onClick: () => { markSaved(); setShowNewDocModal(false); handleStartNew(); },
+            },
+            {
+              label: lbl("startNew"), variant: "danger",
+              onClick: () => { setShowNewDocModal(false); handleStartNew(); },
+            },
+            {
+              label: lbl("cancel"), variant: "secondary",
+              onClick: () => setShowNewDocModal(false),
+            },
+          ]}
+        />
+      )}
+
       <Header />
       <main className="max-w-2xl mx-auto px-4 py-8">
         <StepProgress currentStep={1} />
+
+        <SupportLevelBanner
+          supportLevel={supportLevel}
+          locale={locale}
+          templateName={templateId}
+        />
+
+        <ReviewWarning
+          supportLevel={supportLevel}
+          fields={safeFields}
+          locale={locale}
+        />
+
+        {/* Action bar — save / new document */}
+        <div className="mb-4 flex items-center justify-between gap-2">
+          <button
+            onClick={() => setShowNewDocModal(true)}
+            className="text-xs text-gray-400 hover:text-gray-600 transition-colors flex items-center gap-1"
+          >
+            ← {lbl("newDocBtn")}
+          </button>
+          <button
+            onClick={handleSave}
+            className="text-xs text-brand-600 hover:text-brand-700 font-medium transition-colors"
+          >
+            {lbl("saveBtn")}
+          </button>
+        </div>
+
+        {saveMsg && (
+          <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-xl text-green-700 text-xs flex items-start justify-between gap-2">
+            <span>{saveMsg}</span>
+            <button onClick={() => setSaveMsg(null)} className="flex-shrink-0 text-green-600 font-bold">✕</button>
+          </div>
+        )}
 
         {prefillCount > 0 && answeredCount === 0 && (
           <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-xl text-green-700 text-sm">
@@ -341,11 +599,42 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
           </div>
         )}
 
+        {/* Question overview — collapsed by default */}
+        <QuestionOverview
+          questionFields={questionFields}
+          answeredKeys={safeAnswered}
+          answeredValues={answeredValues ?? {}}
+          currentKey={currentField.key}
+          locale={locale}
+          onJumpTo={(key) => setFocusedKey(key)}
+        />
+
+        {/* Progress line */}
         <div className="mb-3 flex items-center gap-3 text-sm text-gray-400">
           <span>
-            {locale === "ar"
-              ? `سؤال ${answeredCount + 1} من ${totalCount}`
-              : `Question ${answeredCount + 1} of ${totalCount}`}
+            {locale === "ar" || locale === "fa"
+              ? `سؤال ${currentIndex} من ${totalCount}`
+              : locale === "de"
+              ? `Frage ${currentIndex} von ${totalCount}`
+              : locale === "fr"
+              ? `Question ${currentIndex} sur ${totalCount}`
+              : locale === "es"
+              ? `Pregunta ${currentIndex} de ${totalCount}`
+              : locale === "tr"
+              ? `Soru ${currentIndex} / ${totalCount}`
+              : locale === "sq"
+              ? `Pyetja ${currentIndex} nga ${totalCount}`
+              : locale === "ru"
+              ? `Вопрос ${currentIndex} из ${totalCount}`
+              : locale === "uk"
+              ? `Питання ${currentIndex} з ${totalCount}`
+              : `Question ${currentIndex} of ${totalCount}`}
+            {totalCount - answeredCount > 0 && (
+              <span className="ml-2 text-amber-600">
+                · {totalCount - answeredCount}{" "}
+                {locale === "de" ? "fehlend" : locale === "ar" || locale === "fa" ? "مفقود" : locale === "tr" ? "eksik" : locale === "fr" ? "manquant" : locale === "es" ? "pendiente" : locale === "sq" ? "mungon" : locale === "ru" ? "нет ответа" : locale === "uk" ? "без відповіді" : "missing"}
+              </span>
+            )}
           </span>
           <div className="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden">
             <div
@@ -362,12 +651,20 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
           isLoading={isLoading}
           validationErrors={submitError ? [submitError] : []}
           submitLabel={SUBMIT[locale] ?? "Next →"}
-          options={nextField.options ?? []}
-          needsReview={nextField.needs_review ?? false}
-          originalLabel={nextField.original_label}
+          options={currentField.options ?? []}
+          needsReview={currentField.needs_review ?? false}
+          originalLabel={currentField.original_label}
+          fieldKey={currentField.key}
+          guidance={currentField.guidance}
         />
 
-        {/* Always-visible debug panel — shows grounding proof for current question set */}
+        {/* Phase E/E4 + E5 — privacy-first footer: honest copy + wipe link */}
+        <div className="mt-8 pt-4 border-t border-gray-100 flex flex-col items-center gap-3">
+          <PrivacyNote locale={locale} className="text-center text-xs text-gray-500 leading-relaxed max-w-md" />
+          <DeleteSavedData locale={locale} compact />
+        </div>
+
+        {/* Always-visible debug panel — shows grounding proof and question quality */}
         <DebugPanel
           caseId={caseId}
           documentId={documentId}
@@ -375,6 +672,8 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
           questionFieldIds={questionFields.map((f) => f.key)}
           blockedByGuard={blockedByGuard.map((f) => f.key)}
           report={null}
+          questionFields={questionFields}
+          locale={locale}
         />
       </main>
     </>

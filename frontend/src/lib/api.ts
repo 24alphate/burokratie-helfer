@@ -35,40 +35,37 @@ export function isProductionWithoutApiUrl(): boolean {
   return !isLocal && !hasApiUrl;
 }
 
-/** Classify a fetch() rejection or HTTP error into a human-readable stage. */
+/**
+ * Classify a fetch() rejection or HTTP error into an ApiError with a
+ * STABLE STATUS CODE. The .message field is intentionally generic — UI
+ * code must call friendlyError(err, locale) from "@/lib/errors" to render
+ * a user-facing localized string. Never pass .message directly to setError().
+ *
+ * Status code → meaning (consumed by lib/errors.ts classify()):
+ *   0   network unreachable
+ *   401/403  session expired
+ *   413      file too large
+ *   422      no fields detected (or scanned PDF — message contains "scan")
+ *   500      fill failed
+ *   5xx      service error
+ */
 function classifyError(err: unknown, status?: number): ApiError {
-  // Network-level failure (server unreachable, CORS, no internet)
   if (err instanceof TypeError && /failed to fetch|network/i.test(err.message)) {
-    const configured = process.env.NEXT_PUBLIC_API_URL;
-    if (!configured) {
-      return new ApiError(
-        "Cannot reach the backend API. " +
-        "Set NEXT_PUBLIC_API_URL in your Vercel frontend environment variables " +
-        "and redeploy.",
-        0
-      );
-    }
-    return new ApiError(
-      `Cannot reach API at ${configured}. ` +
-        "Check that the backend is deployed and CORS allows this origin.",
-      0
-    );
+    return new ApiError("network", 0);
   }
-
-  // HTTP errors with known status codes
-  if (status === 413) return new ApiError("File is too large. Max 10 MB.", 413);
-  if (status === 404) return new ApiError("Upload endpoint not found (404). Check backend deployment.", 404);
-  if (status === 401 || status === 403) return new ApiError("Session expired. Please refresh and start again.", status);
-  if (status === 422) return new ApiError("PDF has no detectable fillable fields — you can still answer questions manually.", 422);
-  if (status && status >= 500)
-    return new ApiError(
-      "The backend encountered an error while processing the file. " +
-        "Check backend logs for details.",
-      status
-    );
+  if (status === 413) return new ApiError("file_too_large", 413);
+  if (status === 401 || status === 403) return new ApiError("session_expired", status);
+  if (status === 422) {
+    // Preserve any "scan" / "ocr" hint so lib/errors maps to scanned_pdf.
+    const hint = err instanceof Error ? err.message : "";
+    return new ApiError(hint.toLowerCase().includes("scan") ? "scanned_pdf" : "no_fields", 422);
+  }
+  if (status === 404) return new ApiError("service_error", 404);
+  if (status === 500) return new ApiError("fill_failed", 500);
+  if (status && status >= 500) return new ApiError("service_error", status);
 
   if (err instanceof ApiError) return err;
-  return new ApiError(String(err), status ?? 0);
+  return new ApiError("unknown", status ?? 0);
 }
 
 async function request<T>(
