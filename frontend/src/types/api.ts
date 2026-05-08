@@ -109,6 +109,35 @@ export interface AnalysisReport {
   // Phase D/D2 — fill strategy advertisement.
   // "fitz_overlay" | "acroform" | "summary" | null (extraction-only call)
   fill_strategy?: string | null;
+  // Stage 4A — Level 4 OCR diagnostic. Present only when support_level === 4.
+  // The frontend Level-4 unsupported screen reads diagnostic_status to pick
+  // the right user-facing copy. `technical_message` is intentionally NOT
+  // included here — it lives only in backend logs.
+  ocr_diagnostic?: {
+    provider: string;            // "tesseract" | "unavailable"
+    page_count: number;
+    pages: Array<{
+      page: number;
+      blocks: Array<{ text: string; page: number; bbox: number[]; confidence: number; language?: string | null }>;
+      quality: {
+        page: number;
+        width: number;
+        height: number;
+        dpi_estimate: number | null;
+        text_block_count: number;
+        average_confidence: number;
+        readable: boolean;
+        issues: string[];
+      };
+    }>;
+    full_text: string;
+    average_confidence: number;
+    detected_languages: string[];
+    readable_pages: number;
+    unreadable_pages: number;
+    diagnostic_status: "readable" | "low_confidence" | "no_text_found" | "ocr_unavailable" | "failed";
+    user_message: string;
+  } | null;
   // Question quality report
   question_quality?: {
     locale: string;

@@ -47,6 +47,18 @@ interface CaseStore {
   // The questions page reads these to render the support-level banner.
   supportLevel: number | null;        // 1 | 2 | 3 | 4
   templateId: string | null;          // verified template ID, when matched
+  // Stage 4A — Level 4 OCR diagnostic. Populated only for scanned/photo
+  // PDFs. The Level-4 unsupported screen reads this to show user-friendly
+  // status + next-step copy. Cleared on every new upload via
+  // beginNewUpload() / clearCurrentDocument() / reset().
+  ocrDiagnostic: {
+    diagnostic_status: "readable" | "low_confidence" | "no_text_found" | "ocr_unavailable" | "failed";
+    user_message: string;
+    page_count: number;
+    readable_pages: number;
+    average_confidence: number;
+    provider: string;
+  } | null;
 
   // ── Timestamps ───────────────────────────────────────────────────────────
   /** Unix ms when the current pdf_token was signed (set alongside pdfToken). */
@@ -91,7 +103,11 @@ interface CaseStore {
     documentId: string,
     extractedFieldIds: string[],
     uploadAttemptId: string,
-    routing?: { supportLevel: number | null; templateId: string | null },
+    routing?: {
+      supportLevel: number | null;
+      templateId: string | null;
+      ocrDiagnostic?: CaseStore["ocrDiagnostic"];
+    },
   ) => void;
 
   addAnswer: (key: string, value: string) => void;
@@ -126,6 +142,7 @@ export const useCaseStore = create<CaseStore>()(
       answeredKeys: [],
       supportLevel: null,
       templateId: null,
+      ocrDiagnostic: null,
 
       setSessionToken: (token) => set({ sessionToken: token }),
       setCaseId: (id) => set({ caseId: id }),
@@ -153,6 +170,7 @@ export const useCaseStore = create<CaseStore>()(
         answeredKeys: [],
         supportLevel: null,
         templateId: null,
+        ocrDiagnostic: null,
       }),
 
       beginNewUpload: ({ filename, fileSize, fileLastModified }) => {
@@ -176,6 +194,7 @@ export const useCaseStore = create<CaseStore>()(
           answeredKeys: [],
           supportLevel: null,
           templateId: null,
+          ocrDiagnostic: null,
         });
         return id;
       },
@@ -191,6 +210,7 @@ export const useCaseStore = create<CaseStore>()(
           answeredValues: {},
           supportLevel: routing?.supportLevel ?? null,
           templateId: routing?.templateId ?? null,
+          ocrDiagnostic: routing?.ocrDiagnostic ?? null,
         }),
 
       addAnswer: (key, value) =>
@@ -252,6 +272,7 @@ export const useCaseStore = create<CaseStore>()(
           answeredKeys: [],
           supportLevel: null,
           templateId: null,
+          ocrDiagnostic: null,
         }),
     }),
     {

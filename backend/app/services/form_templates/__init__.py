@@ -193,11 +193,14 @@ def validate_template(t: VerifiedTemplate) -> list[str]:
     field_map = t.get_field_map()
     field_ids = [f.field_id for f in field_map]
 
-    # Phase F/0-A — fill_strategy must be one of the supported values
+    # Phase F/0-A — fill_strategy must be one of the supported values.
+    # Phase F6 added "fitz_acroform" for XFA-style PDFs whose /Btn widgets
+    # have no /AP appearance (PyPDF can't write them; fitz can).
     strategy = getattr(t, "fill_strategy", "fitz_overlay")
-    if strategy not in ("fitz_overlay", "acroform"):
+    if strategy not in ("fitz_overlay", "acroform", "fitz_acroform"):
         errors.append(
-            f"INVALID_FILL_STRATEGY: {strategy!r} (must be 'fitz_overlay' or 'acroform')"
+            f"INVALID_FILL_STRATEGY: {strategy!r} "
+            f"(must be 'fitz_overlay', 'acroform', or 'fitz_acroform')"
         )
 
     # Unique field_ids
@@ -218,7 +221,7 @@ def validate_template(t: VerifiedTemplate) -> list[str]:
         if f.field_id not in VERIFIED_BY_FIELD_ID:
             errors.append(f"NO_VERIFIED_QUESTION: {f.field_id}")
         # Every non-signature field must have a WriteSpec — UNLESS the
-        # template uses the acroform strategy, in which case fill_pdf
+        # template uses an acroform-style strategy, in which case fill_pdf
         # writes directly into the PDF widgets without coordinates.
         if strategy == "fitz_overlay" and f.field_id not in spec_ids:
             errors.append(f"NO_WRITE_SPEC: {f.field_id}")

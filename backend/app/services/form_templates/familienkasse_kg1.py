@@ -160,27 +160,31 @@ _SEMANTIC_KEYS: dict = {
 # ── Fingerprint markers ──────────────────────────────────────────────────────
 # All required phrases are German. Conservative: requires THREE federal-form
 # phrases that all appear in KG1 but rarely appear together in other forms.
+# (Verified by F3 + smoke check against the actual KG1 PDF text extraction.)
 _REQUIRED = [
     "antrag auf kindergeld",
     "familienkasse",
-    "steuer-identifikationsnummer",
+    "steuerliche identifikationsnummer",  # the form uses this German phrasing
 ]
 
 # Section markers — at least one must appear. Reduces collision with the
-# Anlage Kind which mentions Kindergeld but not these section names.
+# Anlage Kind form which also mentions Kindergeld but not these markers.
 _SECTION_MARKERS = [
     "anlage kind",
-    "bankverbindung",
     "kontoverbindung",
-    "kindergeld bereits beziehe",
     "zählkinder",
+    "kindergeldnummer",
 ]
 
 
 class FamilienkasseKg1Template(VerifiedTemplate):
     template_id   = "familienkasse_kg1_v1"
     name          = "Familienkasse — Antrag auf Kindergeld (KG1)"
-    fill_strategy = "acroform"
+    # Phase F6 — KG1 is an XFA-styled PDF: its /Btn widgets are bare stubs
+    # without /AP appearance dicts, which PyPDF cannot write to. The new
+    # "fitz_acroform" strategy walks page-level widgets via PyMuPDF, which
+    # handles both born-acroform and XFA-stub PDFs equally well.
+    fill_strategy = "fitz_acroform"
 
     def fingerprint(self, full_text: str) -> bool:
         lo = full_text.lower()
@@ -355,3 +359,523 @@ class FamilienkasseKg1Template(VerifiedTemplate):
                 ],
             ),
         ]
+
+
+# ── Verified questions for all 52 shown KG1 fields ────────────────────────────
+# Merged into VERIFIED_BY_FIELD_ID at module import time (see _register at bottom).
+# Locales required by Phase F1 scope: en, de, fr, ar, tr, sq.
+
+# Standard "Tabelle 1" preamble re-used in every child-row question's `help`.
+_T1_PRE = {
+    "en": "This section is only for children for whom you already receive Kindergeld. If this is your first Kindergeld application, you can skip these fields.",
+    "de": "Dieser Abschnitt ist nur für Kinder, für die Sie bereits Kindergeld erhalten. Wenn dies Ihr erster Kindergeldantrag ist, können Sie diese Felder überspringen.",
+    "fr": "Cette section concerne seulement les enfants pour lesquels vous recevez déjà le Kindergeld. Si c'est votre première demande de Kindergeld, vous pouvez ignorer ces champs.",
+    "ar": "هذا القسم مخصص فقط للأطفال الذين تتلقى لهم بالفعل علاوة الأطفال (Kindergeld). إذا كان هذا هو طلبك الأول للحصول على Kindergeld، يمكنك تخطي هذه الحقول.",
+    "tr": "Bu bölüm yalnızca halihazırda Kindergeld aldığınız çocuklar içindir. Bu ilk Kindergeld başvurunuzsa, bu alanları atlayabilirsiniz.",
+    "sq": "Ky seksion është vetëm për fëmijët për të cilët merrni tashmë Kindergeld. Nëse kjo është aplikimi juaj i parë për Kindergeld, mund t'i kaloni këto fusha.",
+}
+
+_GESCHLECHT_FORMAT = {
+    "en": "Please enter 'm' (male), 'w' (female), or 'd' (diverse).",
+    "de": "Bitte 'm' für männlich, 'w' für weiblich oder 'd' für divers eintragen.",
+    "fr": "Saisissez 'm' (homme), 'w' (femme) ou 'd' (divers).",
+    "ar": "أدخل 'm' (ذكر) أو 'w' (أنثى) أو 'd' (متنوع).",
+    "tr": "Lütfen 'm' (erkek), 'w' (kadın) veya 'd' (diğer) girin.",
+    "sq": "Ju lutemi shkruani 'm' (mashkull), 'w' (femër) ose 'd' (divers).",
+}
+
+_DATE_FORMAT = {
+    "en": "Format: DD.MM.YYYY",
+    "de": "Format: TT.MM.JJJJ",
+    "fr": "Format : JJ.MM.AAAA",
+    "ar": "التنسيق: يوم.شهر.سنة",
+    "tr": "Biçim: GG.AA.YYYY",
+    "sq": "Formati: DD.MM.VVVV",
+}
+
+
+def _kind_question(idx: int, kind: str) -> dict:
+    """
+    Tabelle-1 child row question generator.
+    `kind` is one of: 'vorname' | 'geburtsdatum' | 'geschlecht' | 'familienkasse'.
+    All four versions carry the standard "already receive Kindergeld" preamble.
+    """
+    if kind == "vorname":
+        return {
+            "en": {"question": f"Child {idx} — first name (and different family name, if any)?",
+                   "help": _T1_PRE["en"], "example": "Lena Müller"},
+            "de": {"question": f"Kind {idx} — Vorname (und ggf. abweichender Familienname)?",
+                   "help": _T1_PRE["de"], "example": "Lena Müller"},
+            "fr": {"question": f"Enfant {idx} — prénom (et nom de famille différent, le cas échéant) ?",
+                   "help": _T1_PRE["fr"], "example": "Lena Müller"},
+            "ar": {"question": f"الطفل رقم {idx} — الاسم الأول (واسم العائلة المختلف، إن وجد)؟",
+                   "help": _T1_PRE["ar"], "example": "Lena Müller"},
+            "tr": {"question": f"Çocuk {idx} — adı (ve farklıysa soyadı)?",
+                   "help": _T1_PRE["tr"], "example": "Lena Müller"},
+            "sq": {"question": f"Fëmija {idx} — emri (dhe mbiemri tjetër nëse ka)?",
+                   "help": _T1_PRE["sq"], "example": "Lena Müller"},
+        }
+    if kind == "geburtsdatum":
+        return {
+            "en": {"question": f"Child {idx} — date of birth?",
+                   "help": _T1_PRE["en"], "example": "12.03.2016", "format": _DATE_FORMAT["en"]},
+            "de": {"question": f"Kind {idx} — Geburtsdatum?",
+                   "help": _T1_PRE["de"], "example": "12.03.2016", "format": _DATE_FORMAT["de"]},
+            "fr": {"question": f"Enfant {idx} — date de naissance ?",
+                   "help": _T1_PRE["fr"], "example": "12.03.2016", "format": _DATE_FORMAT["fr"]},
+            "ar": {"question": f"الطفل رقم {idx} — تاريخ الميلاد؟",
+                   "help": _T1_PRE["ar"], "example": "12.03.2016", "format": _DATE_FORMAT["ar"]},
+            "tr": {"question": f"Çocuk {idx} — doğum tarihi?",
+                   "help": _T1_PRE["tr"], "example": "12.03.2016", "format": _DATE_FORMAT["tr"]},
+            "sq": {"question": f"Fëmija {idx} — data e lindjes?",
+                   "help": _T1_PRE["sq"], "example": "12.03.2016", "format": _DATE_FORMAT["sq"]},
+        }
+    if kind == "geschlecht":
+        return {
+            "en": {"question": f"Child {idx} — gender?",
+                   "help": _T1_PRE["en"], "example": "m", "format": _GESCHLECHT_FORMAT["en"]},
+            "de": {"question": f"Kind {idx} — Geschlecht?",
+                   "help": _T1_PRE["de"], "example": "w", "format": _GESCHLECHT_FORMAT["de"]},
+            "fr": {"question": f"Enfant {idx} — genre ?",
+                   "help": _T1_PRE["fr"], "example": "m", "format": _GESCHLECHT_FORMAT["fr"]},
+            "ar": {"question": f"الطفل رقم {idx} — الجنس؟",
+                   "help": _T1_PRE["ar"], "example": "w", "format": _GESCHLECHT_FORMAT["ar"]},
+            "tr": {"question": f"Çocuk {idx} — cinsiyet?",
+                   "help": _T1_PRE["tr"], "example": "m", "format": _GESCHLECHT_FORMAT["tr"]},
+            "sq": {"question": f"Fëmija {idx} — gjinia?",
+                   "help": _T1_PRE["sq"], "example": "m", "format": _GESCHLECHT_FORMAT["sq"]},
+        }
+    if kind == "familienkasse":
+        return {
+            "en": {"question": f"Child {idx} — current Familienkasse + Kindergeld number?",
+                   "help": _T1_PRE["en"], "example": "Familienkasse Rostock — KG-Nr 12345BG0001234"},
+            "de": {"question": f"Kind {idx} — aktuelle Familienkasse + Kindergeldnummer?",
+                   "help": _T1_PRE["de"], "example": "Familienkasse Rostock — KG-Nr 12345BG0001234"},
+            "fr": {"question": f"Enfant {idx} — Familienkasse actuelle + numéro Kindergeld ?",
+                   "help": _T1_PRE["fr"], "example": "Familienkasse Rostock — KG-Nr 12345BG0001234"},
+            "ar": {"question": f"الطفل رقم {idx} — مكتب Familienkasse الحالي + رقم Kindergeld؟",
+                   "help": _T1_PRE["ar"], "example": "Familienkasse Rostock — KG-Nr 12345BG0001234"},
+            "tr": {"question": f"Çocuk {idx} — mevcut Familienkasse + Kindergeld numarası?",
+                   "help": _T1_PRE["tr"], "example": "Familienkasse Rostock — KG-Nr 12345BG0001234"},
+            "sq": {"question": f"Fëmija {idx} — Familienkasse aktuale + numri i Kindergeld?",
+                   "help": _T1_PRE["sq"], "example": "Familienkasse Rostock — KG-Nr 12345BG0001234"},
+        }
+    raise ValueError(f"Unknown kind: {kind!r}")
+
+
+_KG1_QUESTIONS: dict = {
+
+    # ── Header ────────────────────────────────────────────────────────────────
+    W_KG_NR: {
+        "en": {"question": "What is your Kindergeld reference number, if you already have one?",
+               "help": "Leave blank if this is your first Kindergeld application. Otherwise copy from any previous Familienkasse letter.",
+               "example": "12345BG0001234"},
+        "de": {"question": "Wie lautet Ihre Kindergeld-Nummer, falls Sie bereits eine haben?",
+               "help": "Bitte leer lassen, wenn dies Ihr erster Kindergeldantrag ist. Sonst von einem früheren Familienkasse-Brief übernehmen.",
+               "example": "12345BG0001234"},
+        "fr": {"question": "Quel est votre numéro de référence Kindergeld, si vous en avez déjà un ?",
+               "help": "Laissez vide s'il s'agit de votre première demande. Sinon copiez-le depuis un courrier antérieur de la Familienkasse.",
+               "example": "12345BG0001234"},
+        "ar": {"question": "ما هو رقم Kindergeld الخاص بك إن وجد؟",
+               "help": "اتركه فارغًا إذا كان هذا أول طلب لك. وإلا انسخه من رسالة سابقة من Familienkasse.",
+               "example": "12345BG0001234"},
+        "tr": {"question": "Mevcutsa Kindergeld referans numaranız nedir?",
+               "help": "İlk başvurunuzsa boş bırakın. Aksi takdirde Familienkasse'den gelen önceki bir mektuptan kopyalayın.",
+               "example": "12345BG0001234"},
+        "sq": {"question": "Cili është numri juaj i referencës Kindergeld, nëse keni një të tillë?",
+               "help": "Lëreni bosh nëse ky është aplikimi juaj i parë për Kindergeld. Përndryshe kopjojeni nga një letër e mëparshme e Familienkasse.",
+               "example": "12345BG0001234"},
+    },
+    W_TELEFON: {
+        "en": {"question": "What is your phone number for Familienkasse callbacks?",
+               "help": "The Familienkasse may call you with questions about your application.",
+               "example": "0151 12345678"},
+        "de": {"question": "Wie lautet Ihre Telefonnummer für Rückfragen?",
+               "help": "Die Familienkasse kann Sie bei Rückfragen telefonisch erreichen.",
+               "example": "0151 12345678"},
+        "fr": {"question": "Quel est votre numéro de téléphone pour les rappels de la Familienkasse ?",
+               "help": "La Familienkasse peut vous appeler pour des questions sur votre demande.",
+               "example": "0151 12345678"},
+        "ar": {"question": "ما هو رقم هاتفك للاتصال من قبل Familienkasse؟",
+               "help": "قد تتصل بك Familienkasse للاستفسار عن طلبك.",
+               "example": "0151 12345678"},
+        "tr": {"question": "Familienkasse geri arama için telefon numaranız nedir?",
+               "help": "Familienkasse başvurunuz hakkında sorularla sizi arayabilir.",
+               "example": "0151 12345678"},
+        "sq": {"question": "Cili është numri juaj i telefonit për thirrjet e Familienkasse?",
+               "help": "Familienkasse mund t'ju telefonojë për pyetje rreth aplikimit tuaj.",
+               "example": "0151 12345678"},
+    },
+    W_ANZAHL_ANLAGEN: {
+        "en": {"question": "How many 'Anlage Kind' attachments are you submitting with this application?",
+               "help": "One Anlage Kind per child for whom you are NEWLY applying for Kindergeld.",
+               "example": "1"},
+        "de": {"question": "Wie viele Anlagen 'Kind' fügen Sie diesem Antrag bei?",
+               "help": "Eine Anlage Kind pro Kind, für das Sie NEU Kindergeld beantragen.",
+               "example": "1"},
+        "fr": {"question": "Combien d'annexes 'Anlage Kind' joignez-vous à cette demande ?",
+               "help": "Une Anlage Kind par enfant pour lequel vous demandez le Kindergeld pour la première fois.",
+               "example": "1"},
+        "ar": {"question": "كم عدد ملاحق 'Anlage Kind' التي ترفقها مع هذا الطلب؟",
+               "help": "ملحق Anlage Kind واحد لكل طفل تتقدم بطلب جديد للحصول على Kindergeld له.",
+               "example": "1"},
+        "tr": {"question": "Bu başvuruya kaç 'Anlage Kind' eki gönderiyorsunuz?",
+               "help": "Yeni Kindergeld başvurusunda bulunduğunuz her çocuk için bir Anlage Kind.",
+               "example": "1"},
+        "sq": {"question": "Sa shtojca 'Anlage Kind' po dërgoni me këtë aplikim?",
+               "help": "Një Anlage Kind për çdo fëmijë për të cilin po aplikoni për herë të parë për Kindergeld.",
+               "example": "1"},
+    },
+
+    # ── Punkt 1 — Antragsteller ───────────────────────────────────────────────
+    W_APP_TITEL: {
+        "en": {"question": "Your academic title (if any)?", "help": "Optional. Examples: Dr., Prof.", "example": "Dr."},
+        "de": {"question": "Ihr akademischer Titel (falls vorhanden)?", "help": "Optional. Beispiele: Dr., Prof.", "example": "Dr."},
+        "fr": {"question": "Votre titre universitaire (le cas échéant) ?", "help": "Facultatif.", "example": "Dr."},
+        "ar": {"question": "لقبك الأكاديمي (إن وجد)؟", "help": "اختياري.", "example": "Dr."},
+        "tr": {"question": "Akademik unvanınız (varsa)?", "help": "İsteğe bağlı.", "example": "Dr."},
+        "sq": {"question": "Titulli juaj akademik (nëse ka)?", "help": "Opsional.", "example": "Dr."},
+    },
+    W_APP_NAME: {
+        "en": {"question": "What is your family name?", "example": "Müller"},
+        "de": {"question": "Wie lautet Ihr Familienname?", "example": "Müller"},
+        "fr": {"question": "Quel est votre nom de famille ?", "example": "Müller"},
+        "ar": {"question": "ما هو اسم عائلتك؟", "example": "Müller"},
+        "tr": {"question": "Soyadınız nedir?", "example": "Müller"},
+        "sq": {"question": "Cili është mbiemri juaj?", "example": "Müller"},
+    },
+    W_APP_VORNAME: {
+        "en": {"question": "What is your first name?", "example": "Anna"},
+        "de": {"question": "Wie lautet Ihr Vorname?", "example": "Anna"},
+        "fr": {"question": "Quel est votre prénom ?", "example": "Anna"},
+        "ar": {"question": "ما هو اسمك الأول؟", "example": "Anna"},
+        "tr": {"question": "Adınız nedir?", "example": "Anna"},
+        "sq": {"question": "Cili është emri juaj?", "example": "Anna"},
+    },
+    W_APP_GEBURTSNAME: {
+        "en": {"question": "What is your birth name (only if different from your current family name)?",
+               "help": "Maiden name or earlier family name. Leave blank if unchanged."},
+        "de": {"question": "Wie lautet Ihr Geburtsname (nur falls abweichend vom heutigen Familiennamen)?",
+               "help": "Mädchenname oder früherer Familienname. Leer lassen, wenn unverändert."},
+        "fr": {"question": "Quel est votre nom de naissance (uniquement s'il diffère du nom actuel) ?",
+               "help": "Nom de jeune fille ou ancien nom. Laissez vide si inchangé."},
+        "ar": {"question": "ما هو اسمك عند الولادة (فقط إذا كان مختلفًا عن اسمك الحالي)؟",
+               "help": "اتركه فارغًا إذا لم يتغير."},
+        "tr": {"question": "Doğum soyadınız nedir (yalnızca mevcut soyadınızdan farklıysa)?",
+               "help": "Değişmediyse boş bırakın."},
+        "sq": {"question": "Cili është mbiemri juaj i lindjes (vetëm nëse ndryshon nga mbiemri aktual)?",
+               "help": "Lëreni bosh nëse nuk ka ndryshuar."},
+    },
+    W_APP_GEB_DATUM: {
+        "en": {"question": "What is your date of birth?", "example": "15.03.1985", "format": _DATE_FORMAT["en"]},
+        "de": {"question": "Wie lautet Ihr Geburtsdatum?", "example": "15.03.1985", "format": _DATE_FORMAT["de"]},
+        "fr": {"question": "Quelle est votre date de naissance ?", "example": "15.03.1985", "format": _DATE_FORMAT["fr"]},
+        "ar": {"question": "ما هو تاريخ ميلادك؟", "example": "15.03.1985", "format": _DATE_FORMAT["ar"]},
+        "tr": {"question": "Doğum tarihiniz nedir?", "example": "15.03.1985", "format": _DATE_FORMAT["tr"]},
+        "sq": {"question": "Cila është data juaj e lindjes?", "example": "15.03.1985", "format": _DATE_FORMAT["sq"]},
+    },
+    W_APP_GEB_ORT: {
+        "en": {"question": "What is your place of birth?", "example": "Damascus"},
+        "de": {"question": "Wie lautet Ihr Geburtsort?", "example": "Damaskus"},
+        "fr": {"question": "Quel est votre lieu de naissance ?", "example": "Damas"},
+        "ar": {"question": "ما هو مكان ولادتك؟", "example": "دمشق"},
+        "tr": {"question": "Doğum yeriniz nedir?", "example": "Şam"},
+        "sq": {"question": "Cili është vendi juaj i lindjes?", "example": "Damask"},
+    },
+    W_APP_GESCHLECHT: {
+        "en": {"question": "What is your gender?", "example": "w", "format": _GESCHLECHT_FORMAT["en"]},
+        "de": {"question": "Welches Geschlecht haben Sie?", "example": "w", "format": _GESCHLECHT_FORMAT["de"]},
+        "fr": {"question": "Quel est votre genre ?", "example": "w", "format": _GESCHLECHT_FORMAT["fr"]},
+        "ar": {"question": "ما هو جنسك؟", "example": "w", "format": _GESCHLECHT_FORMAT["ar"]},
+        "tr": {"question": "Cinsiyetiniz nedir?", "example": "w", "format": _GESCHLECHT_FORMAT["tr"]},
+        "sq": {"question": "Cili është gjinia juaj?", "example": "w", "format": _GESCHLECHT_FORMAT["sq"]},
+    },
+    W_APP_STAATSANG: {
+        "en": {"question": "What is your nationality?", "example": "Syrian"},
+        "de": {"question": "Welche Staatsangehörigkeit haben Sie?", "example": "syrisch"},
+        "fr": {"question": "Quelle est votre nationalité ?", "example": "syrienne"},
+        "ar": {"question": "ما هي جنسيتك؟", "example": "سورية"},
+        "tr": {"question": "Uyruğunuz nedir?", "example": "Suriye"},
+        "sq": {"question": "Cila është shtetësia juaj?", "example": "Siriane"},
+    },
+    W_APP_ANSCHRIFT: {
+        "en": {"question": "What is your address (street, house number, postal code, city)?",
+               "example": "Hauptstraße 12, 18055 Rostock"},
+        "de": {"question": "Wie lautet Ihre Anschrift (Straße, Hausnummer, PLZ, Ort)?",
+               "example": "Hauptstraße 12, 18055 Rostock"},
+        "fr": {"question": "Quelle est votre adresse (rue, numéro, code postal, ville) ?",
+               "example": "Hauptstraße 12, 18055 Rostock"},
+        "ar": {"question": "ما هو عنوانك (الشارع، رقم المنزل، الرمز البريدي، المدينة)؟",
+               "example": "Hauptstraße 12, 18055 Rostock"},
+        "tr": {"question": "Adresiniz nedir (sokak, kapı numarası, posta kodu, şehir)?",
+               "example": "Hauptstraße 12, 18055 Rostock"},
+        "sq": {"question": "Cila është adresa juaj (rruga, numri, kodi postar, qyteti)?",
+               "example": "Hauptstraße 12, 18055 Rostock"},
+    },
+
+    # ── Familienstand (logical radio + "seit" date) ──────────────────────────
+    LOGICAL_FAMILIENSTAND: {
+        "en": {"question": "What is your marital status?",
+               "help": "Choose the option that matches your status today."},
+        "de": {"question": "Wie ist Ihr Familienstand?",
+               "help": "Wählen Sie die Option, die Ihrem heutigen Status entspricht."},
+        "fr": {"question": "Quelle est votre situation familiale ?",
+               "help": "Choisissez l'option qui correspond à votre statut actuel."},
+        "ar": {"question": "ما هي حالتك الاجتماعية؟",
+               "help": "اختر الخيار الذي يتوافق مع وضعك الحالي."},
+        "tr": {"question": "Medeni durumunuz nedir?",
+               "help": "Bugünkü durumunuza uygun seçeneği seçin."},
+        "sq": {"question": "Cila është gjendja juaj civile?",
+               "help": "Zgjidhni opsionin që përputhet me statusin tuaj sot."},
+    },
+    W_FS_SEIT: {
+        "en": {"question": "Since when has your current marital status applied?",
+               "example": "01.06.2020", "format": _DATE_FORMAT["en"]},
+        "de": {"question": "Seit wann besteht Ihr derzeitiger Familienstand?",
+               "example": "01.06.2020", "format": _DATE_FORMAT["de"]},
+        "fr": {"question": "Depuis quand votre situation familiale actuelle s'applique-t-elle ?",
+               "example": "01.06.2020", "format": _DATE_FORMAT["fr"]},
+        "ar": {"question": "منذ متى تنطبق حالتك الاجتماعية الحالية؟",
+               "example": "01.06.2020", "format": _DATE_FORMAT["ar"]},
+        "tr": {"question": "Mevcut medeni durumunuz ne zamandan beri geçerli?",
+               "example": "01.06.2020", "format": _DATE_FORMAT["tr"]},
+        "sq": {"question": "Që kur është aktuale gjendja juaj civile?",
+               "example": "01.06.2020", "format": _DATE_FORMAT["sq"]},
+    },
+
+    # ── Punkt 2 — Partner ─────────────────────────────────────────────────────
+    W_PRT_NAME: {
+        "en": {"question": "What is your partner's family name?", "example": "Müller"},
+        "de": {"question": "Wie lautet der Familienname Ihres Partners / Ihrer Partnerin?", "example": "Müller"},
+        "fr": {"question": "Quel est le nom de famille de votre partenaire ?", "example": "Müller"},
+        "ar": {"question": "ما هو اسم عائلة شريكك؟", "example": "Müller"},
+        "tr": {"question": "Eşinizin/partnerinizin soyadı nedir?", "example": "Müller"},
+        "sq": {"question": "Cili është mbiemri i partnerit/partneres suaj?", "example": "Müller"},
+    },
+    W_PRT_VORNAME: {
+        "en": {"question": "What is your partner's first name?", "example": "Markus"},
+        "de": {"question": "Wie lautet der Vorname Ihres Partners / Ihrer Partnerin?", "example": "Markus"},
+        "fr": {"question": "Quel est le prénom de votre partenaire ?", "example": "Markus"},
+        "ar": {"question": "ما هو الاسم الأول لشريكك؟", "example": "Markus"},
+        "tr": {"question": "Eşinizin/partnerinizin adı nedir?", "example": "Markus"},
+        "sq": {"question": "Cili është emri i partnerit/partneres suaj?", "example": "Markus"},
+    },
+    W_PRT_TITEL: {
+        "en": {"question": "Partner's academic title (if any)?", "help": "Optional.", "example": "Dr."},
+        "de": {"question": "Akademischer Titel des Partners (falls vorhanden)?", "help": "Optional.", "example": "Dr."},
+        "fr": {"question": "Titre universitaire du partenaire (le cas échéant) ?", "help": "Facultatif.", "example": "Dr."},
+        "ar": {"question": "اللقب الأكاديمي للشريك (إن وجد)؟", "help": "اختياري.", "example": "Dr."},
+        "tr": {"question": "Eşin/partnerin akademik unvanı (varsa)?", "help": "İsteğe bağlı.", "example": "Dr."},
+        "sq": {"question": "Titulli akademik i partnerit (nëse ka)?", "help": "Opsional.", "example": "Dr."},
+    },
+    W_PRT_GEB_DATUM: {
+        "en": {"question": "Partner's date of birth?", "example": "20.07.1983", "format": _DATE_FORMAT["en"]},
+        "de": {"question": "Geburtsdatum des Partners / der Partnerin?", "example": "20.07.1983", "format": _DATE_FORMAT["de"]},
+        "fr": {"question": "Date de naissance du partenaire ?", "example": "20.07.1983", "format": _DATE_FORMAT["fr"]},
+        "ar": {"question": "تاريخ ميلاد الشريك؟", "example": "20.07.1983", "format": _DATE_FORMAT["ar"]},
+        "tr": {"question": "Eşin/partnerin doğum tarihi?", "example": "20.07.1983", "format": _DATE_FORMAT["tr"]},
+        "sq": {"question": "Data e lindjes së partnerit/partneres?", "example": "20.07.1983", "format": _DATE_FORMAT["sq"]},
+    },
+    W_PRT_STAATSANG: {
+        "en": {"question": "Partner's nationality?", "example": "German"},
+        "de": {"question": "Staatsangehörigkeit des Partners / der Partnerin?", "example": "deutsch"},
+        "fr": {"question": "Nationalité du partenaire ?", "example": "allemande"},
+        "ar": {"question": "جنسية الشريك؟", "example": "ألمانية"},
+        "tr": {"question": "Eşin/partnerin uyruğu?", "example": "Alman"},
+        "sq": {"question": "Shtetësia e partnerit/partneres?", "example": "Gjermane"},
+    },
+    W_PRT_GESCHLECHT: {
+        "en": {"question": "Partner's gender?", "example": "m", "format": _GESCHLECHT_FORMAT["en"]},
+        "de": {"question": "Geschlecht des Partners / der Partnerin?", "example": "m", "format": _GESCHLECHT_FORMAT["de"]},
+        "fr": {"question": "Genre du partenaire ?", "example": "m", "format": _GESCHLECHT_FORMAT["fr"]},
+        "ar": {"question": "جنس الشريك؟", "example": "m", "format": _GESCHLECHT_FORMAT["ar"]},
+        "tr": {"question": "Eşin/partnerin cinsiyeti?", "example": "m", "format": _GESCHLECHT_FORMAT["tr"]},
+        "sq": {"question": "Gjinia e partnerit/partneres?", "example": "m", "format": _GESCHLECHT_FORMAT["sq"]},
+    },
+    W_PRT_GEBURTSNAME: {
+        "en": {"question": "Partner's birth name (only if different from current family name)?", "help": "Leave blank if unchanged."},
+        "de": {"question": "Geburtsname des Partners (nur falls abweichend)?", "help": "Leer lassen, wenn unverändert."},
+        "fr": {"question": "Nom de naissance du partenaire (uniquement s'il diffère) ?", "help": "Laissez vide si inchangé."},
+        "ar": {"question": "اسم الشريك عند الولادة (فقط إذا اختلف)؟", "help": "اتركه فارغًا إذا لم يتغير."},
+        "tr": {"question": "Eşin/partnerin doğum soyadı (yalnızca farklıysa)?", "help": "Değişmediyse boş bırakın."},
+        "sq": {"question": "Mbiemri i lindjes së partnerit (vetëm nëse ndryshon)?", "help": "Lëreni bosh nëse nuk ka ndryshuar."},
+    },
+    W_PRT_ANSCHRIFT: {
+        "en": {"question": "Partner's address (only if different from yours)?", "help": "Leave blank if you live at the same address.",
+               "example": "Hauptstraße 12, 18055 Rostock"},
+        "de": {"question": "Anschrift des Partners (nur falls abweichend von Ihrer)?", "help": "Leer lassen, wenn dieselbe Adresse.",
+               "example": "Hauptstraße 12, 18055 Rostock"},
+        "fr": {"question": "Adresse du partenaire (uniquement si différente de la vôtre) ?", "help": "Laissez vide si vous vivez à la même adresse.",
+               "example": "Hauptstraße 12, 18055 Rostock"},
+        "ar": {"question": "عنوان الشريك (فقط إذا اختلف عن عنوانك)؟", "help": "اتركه فارغًا إذا كنتم تعيشون في نفس العنوان.",
+               "example": "Hauptstraße 12, 18055 Rostock"},
+        "tr": {"question": "Eşin/partnerin adresi (yalnızca sizinkinden farklıysa)?", "help": "Aynı adreste yaşıyorsanız boş bırakın.",
+               "example": "Hauptstraße 12, 18055 Rostock"},
+        "sq": {"question": "Adresa e partnerit (vetëm nëse ndryshon nga e juaja)?", "help": "Lëreni bosh nëse jetoni në të njëjtën adresë.",
+               "example": "Hauptstraße 12, 18055 Rostock"},
+    },
+
+    # ── Punkt 3 — Bankverbindung ──────────────────────────────────────────────
+    W_BANK_IBAN: {
+        "en": {"question": "What is your bank account IBAN?",
+               "help": "Find it at the top of your bank statement or in your banking app.",
+               "example": "DE89 3704 0044 0532 0130 00"},
+        "de": {"question": "Wie lautet die IBAN Ihres Bankkontos?",
+               "help": "Sie finden sie oben auf Ihrem Kontoauszug oder in Ihrer Banking-App.",
+               "example": "DE89 3704 0044 0532 0130 00"},
+        "fr": {"question": "Quel est l'IBAN de votre compte bancaire ?",
+               "help": "Vous le trouverez en haut de votre relevé bancaire ou dans votre application bancaire.",
+               "example": "DE89 3704 0044 0532 0130 00"},
+        "ar": {"question": "ما هو رقم IBAN لحسابك المصرفي؟",
+               "help": "ستجده في أعلى كشف الحساب البنكي أو في تطبيق البنك.",
+               "example": "DE89 3704 0044 0532 0130 00"},
+        "tr": {"question": "Banka hesabınızın IBAN numarası nedir?",
+               "help": "Hesap özetinizin üstünde veya bankacılık uygulamanızda bulabilirsiniz.",
+               "example": "DE89 3704 0044 0532 0130 00"},
+        "sq": {"question": "Cili është IBAN-i i llogarisë suaj bankare?",
+               "help": "E gjeni në krye të deklaratës bankare ose në aplikacionin tuaj bankar.",
+               "example": "DE89 3704 0044 0532 0130 00"},
+    },
+    W_BANK_BIC: {
+        "en": {"question": "What is the BIC of your bank?",
+               "help": "Sometimes called SWIFT code.", "example": "COBADEFFXXX"},
+        "de": {"question": "Wie lautet die BIC Ihrer Bank?",
+               "help": "Auch SWIFT-Code genannt.", "example": "COBADEFFXXX"},
+        "fr": {"question": "Quel est le BIC de votre banque ?",
+               "help": "Aussi appelé code SWIFT.", "example": "COBADEFFXXX"},
+        "ar": {"question": "ما هو رمز BIC لبنكك؟",
+               "help": "يُسمى أيضًا رمز SWIFT.", "example": "COBADEFFXXX"},
+        "tr": {"question": "Bankanızın BIC numarası nedir?",
+               "help": "SWIFT kodu olarak da bilinir.", "example": "COBADEFFXXX"},
+        "sq": {"question": "Cili është BIC-i i bankës suaj?",
+               "help": "Gjithashtu i njohur si kodi SWIFT.", "example": "COBADEFFXXX"},
+    },
+    W_BANK_NAME: {
+        "en": {"question": "What is the name of your bank?", "example": "Commerzbank"},
+        "de": {"question": "Wie heißt Ihre Bank?",            "example": "Commerzbank"},
+        "fr": {"question": "Quel est le nom de votre banque ?", "example": "Commerzbank"},
+        "ar": {"question": "ما هو اسم بنكك؟",                  "example": "Commerzbank"},
+        "tr": {"question": "Bankanızın adı nedir?",            "example": "Commerzbank"},
+        "sq": {"question": "Cili është emri i bankës suaj?",   "example": "Commerzbank"},
+    },
+    LOGICAL_BANK_OWNER: {
+        "en": {"question": "Who is the holder of the bank account where the Kindergeld should be paid?",
+               "help": "Choose 'Antragsteller' if it is your own account; choose 'andere Person' if the account belongs to someone else (you'll then describe that person below)."},
+        "de": {"question": "Wer ist der Inhaber des Bankkontos, auf das das Kindergeld überwiesen werden soll?",
+               "help": "Wählen Sie 'Antragsteller', wenn es Ihr eigenes Konto ist; wählen Sie 'andere Person', wenn das Konto einer anderen Person gehört (diese Person wird dann unten angegeben)."},
+        "fr": {"question": "Qui est le titulaire du compte bancaire sur lequel le Kindergeld doit être versé ?",
+               "help": "Choisissez 'Antragsteller' s'il s'agit de votre propre compte ; choisissez 'andere Person' si le compte appartient à quelqu'un d'autre (à décrire ci-dessous)."},
+        "ar": {"question": "من هو صاحب الحساب المصرفي الذي يجب أن يُصرف فيه Kindergeld؟",
+               "help": "اختر 'Antragsteller' إذا كان حسابك الخاص؛ اختر 'andere Person' إذا كان الحساب يخص شخصًا آخر."},
+        "tr": {"question": "Kindergeld'in yatırılacağı banka hesabının sahibi kimdir?",
+               "help": "Kendi hesabınızsa 'Antragsteller'i seçin; başka bir kişinin hesabıysa 'andere Person'u seçin."},
+        "sq": {"question": "Kush është mbajtësi i llogarisë bankare ku duhet të paguhet Kindergeld?",
+               "help": "Zgjidhni 'Antragsteller' nëse është llogaria juaj; zgjidhni 'andere Person' nëse llogaria i përket dikujt tjetër."},
+    },
+    W_BANK_OWNER_NAME: {
+        "en": {"question": "Name of the bank account holder?",
+               "help": "Exactly as it appears on the bank statement.", "example": "Anna Müller"},
+        "de": {"question": "Name des Kontoinhabers?",
+               "help": "Genau wie auf dem Kontoauszug.", "example": "Anna Müller"},
+        "fr": {"question": "Nom du titulaire du compte bancaire ?",
+               "help": "Exactement comme indiqué sur le relevé.", "example": "Anna Müller"},
+        "ar": {"question": "اسم صاحب الحساب المصرفي؟",
+               "help": "تمامًا كما يظهر في كشف الحساب.", "example": "Anna Müller"},
+        "tr": {"question": "Banka hesap sahibinin adı?",
+               "help": "Hesap özetinde göründüğü gibi.", "example": "Anna Müller"},
+        "sq": {"question": "Emri i mbajtësit të llogarisë bankare?",
+               "help": "Saktësisht siç shfaqet në deklaratën bankare.", "example": "Anna Müller"},
+    },
+
+    # ── Punkt 4 — Abweichende Person (only if Punkt 3 said "andere Person") ──
+    W_AP_NAME: {
+        "en": {"question": "Family name of the alternative account holder?",
+               "help": "Only fill this if you chose 'andere Person' for the bank account holder above.", "example": "Schmidt"},
+        "de": {"question": "Familienname der abweichenden Person?",
+               "help": "Nur ausfüllen, wenn Sie oben 'andere Person' als Kontoinhaber gewählt haben.", "example": "Schmidt"},
+        "fr": {"question": "Nom de famille du titulaire du compte alternatif ?",
+               "help": "À remplir uniquement si vous avez choisi 'andere Person' ci-dessus.", "example": "Schmidt"},
+        "ar": {"question": "اسم عائلة صاحب الحساب البديل؟",
+               "help": "املأ هذا فقط إذا اخترت 'andere Person' أعلاه.", "example": "Schmidt"},
+        "tr": {"question": "Alternatif hesap sahibinin soyadı?",
+               "help": "Yalnızca yukarıda 'andere Person'u seçtiyseniz doldurun.", "example": "Schmidt"},
+        "sq": {"question": "Mbiemri i mbajtësit alternativ të llogarisë?",
+               "help": "Plotësoni vetëm nëse keni zgjedhur 'andere Person' më lart.", "example": "Schmidt"},
+    },
+    W_AP_VORNAME: {
+        "en": {"question": "First name of the alternative account holder?", "example": "Klaus"},
+        "de": {"question": "Vorname der abweichenden Person?",              "example": "Klaus"},
+        "fr": {"question": "Prénom du titulaire du compte alternatif ?",    "example": "Klaus"},
+        "ar": {"question": "الاسم الأول لصاحب الحساب البديل؟",              "example": "Klaus"},
+        "tr": {"question": "Alternatif hesap sahibinin adı?",               "example": "Klaus"},
+        "sq": {"question": "Emri i mbajtësit alternativ të llogarisë?",     "example": "Klaus"},
+    },
+    W_AP_ANSCHRIFT: {
+        "en": {"question": "Address of the alternative account holder?",
+               "example": "Bahnhofstraße 5, 18055 Rostock"},
+        "de": {"question": "Anschrift der abweichenden Person?",
+               "example": "Bahnhofstraße 5, 18055 Rostock"},
+        "fr": {"question": "Adresse du titulaire du compte alternatif ?",
+               "example": "Bahnhofstraße 5, 18055 Rostock"},
+        "ar": {"question": "عنوان صاحب الحساب البديل؟",
+               "example": "Bahnhofstraße 5, 18055 Rostock"},
+        "tr": {"question": "Alternatif hesap sahibinin adresi?",
+               "example": "Bahnhofstraße 5, 18055 Rostock"},
+        "sq": {"question": "Adresa e mbajtësit alternativ të llogarisë?",
+               "example": "Bahnhofstraße 5, 18055 Rostock"},
+    },
+
+    # ── Punkt 5 — Tabelle 1 Kinder (5 rows × 4 cols) ─────────────────────────
+    # Generated below using _kind_question(); inserted into _KG1_QUESTIONS by _build_table1().
+
+    # ── Unterschrift dates ────────────────────────────────────────────────────
+    W_DATUM_1: {
+        "en": {"question": "What is today's date for your signature?", "example": "08.05.2026", "format": _DATE_FORMAT["en"]},
+        "de": {"question": "Welches Datum tragen Sie bei Ihrer Unterschrift ein?", "example": "08.05.2026", "format": _DATE_FORMAT["de"]},
+        "fr": {"question": "Quelle est la date d'aujourd'hui pour votre signature ?", "example": "08.05.2026", "format": _DATE_FORMAT["fr"]},
+        "ar": {"question": "ما هو تاريخ اليوم بجانب توقيعك؟", "example": "08.05.2026", "format": _DATE_FORMAT["ar"]},
+        "tr": {"question": "İmzanız için bugünün tarihi nedir?", "example": "08.05.2026", "format": _DATE_FORMAT["tr"]},
+        "sq": {"question": "Cila është data e sotme për nënshkrimin tuaj?", "example": "08.05.2026", "format": _DATE_FORMAT["sq"]},
+    },
+    W_DATUM_2: {
+        "en": {"question": "Date for the second signature (if applicable, e.g. partner)?",
+               "help": "Leave blank if no second signature is required.",
+               "example": "08.05.2026", "format": _DATE_FORMAT["en"]},
+        "de": {"question": "Datum für die zweite Unterschrift (falls zutreffend, z.B. Partner)?",
+               "help": "Leer lassen, wenn keine zweite Unterschrift erforderlich ist.",
+               "example": "08.05.2026", "format": _DATE_FORMAT["de"]},
+        "fr": {"question": "Date pour la deuxième signature (le cas échéant, par ex. partenaire) ?",
+               "help": "Laissez vide si aucune deuxième signature n'est requise.",
+               "example": "08.05.2026", "format": _DATE_FORMAT["fr"]},
+        "ar": {"question": "تاريخ التوقيع الثاني (إن وجد، مثلاً الشريك)؟",
+               "help": "اتركه فارغًا إذا لم يكن مطلوبًا توقيع ثانٍ.",
+               "example": "08.05.2026", "format": _DATE_FORMAT["ar"]},
+        "tr": {"question": "İkinci imza için tarih (varsa, örn. eş)?",
+               "help": "İkinci imza gerekmiyorsa boş bırakın.",
+               "example": "08.05.2026", "format": _DATE_FORMAT["tr"]},
+        "sq": {"question": "Data për nënshkrimin e dytë (nëse aplikohet, p.sh. partneri)?",
+               "help": "Lëreni bosh nëse nuk kërkohet nënshkrim i dytë.",
+               "example": "08.05.2026", "format": _DATE_FORMAT["sq"]},
+    },
+}
+
+
+# Generate the 20 Tabelle-1 entries programmatically.
+for _row in (1, 2, 3, 4, 5):
+    _KG1_QUESTIONS[_w_t1(_row, 1)] = _kind_question(_row, "vorname")
+    _KG1_QUESTIONS[_w_t1(_row, 2)] = _kind_question(_row, "geburtsdatum")
+    _KG1_QUESTIONS[_w_t1(_row, 3)] = _kind_question(_row, "geschlecht")
+    _KG1_QUESTIONS[_w_t1(_row, 4)] = _kind_question(_row, "familienkasse")
+
+
+def _register_kg1_verified_questions() -> None:
+    """
+    Merge KG1 verified questions into the global VERIFIED_BY_FIELD_ID dict.
+    Runs once, at module import time (which happens lazily inside
+    `form_templates._all_templates()` — well before validate_template()).
+    """
+    from app.services.verified_questions import VERIFIED_BY_FIELD_ID
+    VERIFIED_BY_FIELD_ID.update(_KG1_QUESTIONS)
+
+
+_register_kg1_verified_questions()

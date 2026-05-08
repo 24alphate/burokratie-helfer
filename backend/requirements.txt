@@ -12,3 +12,10 @@ python-dotenv==1.0.1
 openai>=1.60.0
 itsdangerous==2.2.0
 pymupdf==1.24.11
+# Stage 4A — OCR diagnostic for Level 4 (scanned/photo) PDFs.
+# These are PYTHON wrappers; the actual OCR engine must be installed at the
+# OS level. See docs/OCR_INSTALL.md for `tesseract-ocr` + `tesseract-ocr-deu`
+# install instructions. The backend fails GRACEFULLY when the binary is
+# missing — the user sees "OCR is not installed on this server yet."
+pytesseract==0.3.13
+Pillow==10.4.0

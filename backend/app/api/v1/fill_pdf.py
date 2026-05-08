@@ -325,6 +325,100 @@ async def fill_pdf(body: FillPdfRequest):
                     },
                 )
 
+            # ── 3a-iii. Verified template + fitz_acroform fill (Phase F6) ──
+            # Same strict policy as 3a-ii, but uses PyMuPDF instead of
+            # PyPDF to write into the AcroForm widgets. Required for
+            # XFA-styled PDFs (e.g. Familienkasse KG1) whose /Btn widgets
+            # have no /AP appearance dict — PyPDF can't write to those;
+            # fitz can.
+            if template_fill_strategy == "fitz_acroform":
+                # Reuse the same radio_group expansion logic as the PyPDF
+                # branch above. It runs BEFORE the actual fill so the
+                # downstream filler only sees per-widget Yes/Off writes.
+                radio_groups = list(getattr(template, "get_radio_groups", lambda: [])())
+                expanded_answers = dict(body.answers)
+                for rg in radio_groups:
+                    chosen = expanded_answers.pop(rg.field_id, None)
+                    selected_widget = None
+                    if chosen is not None:
+                        for value, widget in rg.options:
+                            if value == chosen:
+                                selected_widget = widget
+                                break
+                        if selected_widget is None:
+                            log.warning(
+                                "fill-pdf RADIO_GROUP_VALUE_NOT_IN_OPTIONS "
+                                "template_id=%s field_id=%s value=%r",
+                                template_id, rg.field_id, chosen,
+                            )
+                    for widget_name in rg.widget_names:
+                        expanded_answers[widget_name] = (
+                            "Yes" if widget_name == selected_widget else "Off"
+                        )
+
+                from app.services.pdf_generator.fitz_acroform_fill import (
+                    fill_acroform_via_fitz,
+                )
+                try:
+                    result = fill_acroform_via_fitz(pdf_bytes, expanded_answers)
+                except Exception as e:
+                    log.critical(
+                        "fill-pdf VERIFIED_FITZ_ACROFORM_CRASHED "
+                        "template_id=%s err=%s",
+                        template_id, e,
+                    )
+                    raise HTTPException(
+                        status_code=500,
+                        detail=(
+                            "We could not safely fill this PDF. Please try "
+                            "another PDF or fill this one manually."
+                        ),
+                    )
+
+                if result.warnings:
+                    log.warning(
+                        "fill-pdf VERIFIED_FITZ_ACROFORM_WARNINGS "
+                        "template_id=%s: %s",
+                        template_id, result.warnings,
+                    )
+
+                # Strict invariant: zero fields written when the user
+                # supplied answers means the widgets did not accept our
+                # values. Refuse rather than return an empty form.
+                if result.field_count_filled == 0 and len(expanded_answers) > 0:
+                    log.critical(
+                        "fill-pdf VERIFIED_FITZ_ACROFORM_ZERO_FILL "
+                        "template_id=%s answers=%d",
+                        template_id, len(expanded_answers),
+                    )
+                    raise HTTPException(
+                        status_code=500,
+                        detail=(
+                            "We could not safely fill this PDF. Please try "
+                            "another PDF or fill this one manually."
+                        ),
+                    )
+
+                log.info(
+                    "fill-pdf VERIFIED_FITZ_ACROFORM_DONE template_id=%s filled=%d",
+                    template_id, result.field_count_filled,
+                )
+                return Response(
+                    content=result.pdf_bytes,
+                    media_type="application/pdf",
+                    headers={
+                        "Content-Disposition": f'attachment; filename="{safe_name}"',
+                        # Same advertisement as the PyPDF acroform path —
+                        # both write into the original PDF's AcroForm
+                        # widgets. The frontend doesn't need to care which
+                        # backend was used.
+                        "X-Fill-Strategy": "acroform",
+                        "X-Fields-Filled": str(result.field_count_filled),
+                        "Access-Control-Expose-Headers":
+                            "X-Fill-Strategy,X-Fields-Filled,X-Not-Fillable-Fields",
+                    },
+                )
+
             # Defence in depth: an unknown strategy on a Level 1 template is
             # a config bug. Refuse rather than silently fall through to the
             # legacy AcroForm/summary path below.

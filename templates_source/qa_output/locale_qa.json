@@ -1,0 +1,302 @@
+{
+  "en": {
+    "support_level": 1,
+    "template_id": "familienkasse_kg1_v1",
+    "fill_strategy": "acroform",
+    "shown_count": 52,
+    "manual_count": 33,
+    "weak_questions": 0,
+    "ai_calls_made": 0,
+    "question_sources": {
+      "verified": 52,
+      "semantic": 0,
+      "ai": 0,
+      "deterministic": 0,
+      "label": 0,
+      "key": 0
+    },
+    "first_5_questions": [
+      {
+        "field_id": "ubform[0].Seite1[0].#area[0].Kopfzeile[0].KG-Nr[0]",
+        "q": "What is your Kindergeld reference number, if you already have one?",
+        "source": "verified",
+        "type": "text"
+      },
+      {
+        "field_id": "eite1[0].#area[0].Kopfzeile[0].#area[3].Telefon[0]",
+        "q": "What is your phone number for Familienkasse callbacks?",
+        "source": "verified",
+        "type": "text"
+      },
+      {
+        "field_id": "eite1[0].#area[0].Überschrift[0].Anzahl-Anlagen[0]",
+        "q": "How many 'Anlage Kind' attachments are you submitting with this application?",
+        "source": "verified",
+        "type": "text"
+      },
+      {
+        "field_id": "Punkt-1[0].Pkt-1-Zeile-1[0].Titel-Antragsteller[0]",
+        "q": "Your academic title (if any)?",
+        "source": "verified",
+        "type": "text"
+      },
+      {
+        "field_id": ".Punkt-1[0].Pkt-1-Zeile-1[0].Name-Antragsteller[0]",
+        "q": "What is your family name?",
+        "source": "verified",
+        "type": "text"
+      }
+    ],
+    "tabelle1_preamble": "This section is only for children for whom you already receive Kindergeld. If this is your first Kindergeld application, you can skip these fields."
+  },
+  "de": {
+    "support_level": 1,
+    "template_id": "familienkasse_kg1_v1",
+    "fill_strategy": "acroform",
+    "shown_count": 52,
+    "manual_count": 33,
+    "weak_questions": 0,
+    "ai_calls_made": 0,
+    "question_sources": {
+      "verified": 52,
+      "semantic": 0,
+      "ai": 0,
+      "deterministic": 0,
+      "label": 0,
+      "key": 0
+    },
+    "first_5_questions": [
+      {
+        "field_id": "ubform[0].Seite1[0].#area[0].Kopfzeile[0].KG-Nr[0]",
+        "q": "Wie lautet Ihre Kindergeld-Nummer, falls Sie bereits eine haben?",
+        "source": "verified",
+        "type": "text"
+      },
+      {
+        "field_id": "eite1[0].#area[0].Kopfzeile[0].#area[3].Telefon[0]",
+        "q": "Wie lautet Ihre Telefonnummer für Rückfragen?",
+        "source": "verified",
+        "type": "text"
+      },
+      {
+        "field_id": "eite1[0].#area[0].Überschrift[0].Anzahl-Anlagen[0]",
+        "q": "Wie viele Anlagen 'Kind' fügen Sie diesem Antrag bei?",
+        "source": "verified",
+        "type": "text"
+      },
+      {
+        "field_id": "Punkt-1[0].Pkt-1-Zeile-1[0].Titel-Antragsteller[0]",
+        "q": "Ihr akademischer Titel (falls vorhanden)?",
+        "source": "verified",
+        "type": "text"
+      },
+      {
+        "field_id": ".Punkt-1[0].Pkt-1-Zeile-1[0].Name-Antragsteller[0]",
+        "q": "Wie lautet Ihr Familienname?",
+        "source": "verified",
+        "type": "text"
+      }
+    ],
+    "tabelle1_preamble": "Dieser Abschnitt ist nur für Kinder, für die Sie bereits Kindergeld erhalten. Wenn dies Ihr erster Kindergeldantrag ist, können Sie diese Felder überspringen."
+  },
+  "fr": {
+    "support_level": 1,
+    "template_id": "familienkasse_kg1_v1",
+    "fill_strategy": "acroform",
+    "shown_count": 52,
+    "manual_count": 33,
+    "weak_questions": 0,
+    "ai_calls_made": 0,
+    "question_sources": {
+      "verified": 52,
+      "semantic": 0,
+      "ai": 0,
+      "deterministic": 0,
+      "label": 0,
+      "key": 0
+    },
+    "first_5_questions": [
+      {
+        "field_id": "ubform[0].Seite1[0].#area[0].Kopfzeile[0].KG-Nr[0]",
+        "q": "Quel est votre numéro de référence Kindergeld, si vous en avez déjà un ?",
+        "source": "verified",
+        "type": "text"
+      },
+      {
+        "field_id": "eite1[0].#area[0].Kopfzeile[0].#area[3].Telefon[0]",
+        "q": "Quel est votre numéro de téléphone pour les rappels de la Familienkasse ?",
+        "source": "verified",
+        "type": "text"
+      },
+      {
+        "field_id": "eite1[0].#area[0].Überschrift[0].Anzahl-Anlagen[0]",
+        "q": "Combien d'annexes 'Anlage Kind' joignez-vous à cette demande ?",
+        "source": "verified",
+        "type": "text"
+      },
+      {
+        "field_id": "Punkt-1[0].Pkt-1-Zeile-1[0].Titel-Antragsteller[0]",
+        "q": "Votre titre universitaire (le cas échéant) ?",
+        "source": "verified",
+        "type": "text"
+      },
+      {
+        "field_id": ".Punkt-1[0].Pkt-1-Zeile-1[0].Name-Antragsteller[0]",
+        "q": "Quel est votre nom de famille ?",
+        "source": "verified",
+        "type": "text"
+      }
+    ],
+    "tabelle1_preamble": "Cette section concerne seulement les enfants pour lesquels vous recevez déjà le Kindergeld. Si c'est votre première demande de Kindergeld, vous pouvez ignorer ces champs."
+  },
+  "ar": {
+    "support_level": 1,
+    "template_id": "familienkasse_kg1_v1",
+    "fill_strategy": "acroform",
+    "shown_count": 52,
+    "manual_count": 33,
+    "weak_questions": 0,
+    "ai_calls_made": 0,
+    "question_sources": {
+      "verified": 52,
+      "semantic": 0,
+      "ai": 0,
+      "deterministic": 0,
+      "label": 0,
+      "key": 0
+    },
+    "first_5_questions": [
+      {
+        "field_id": "ubform[0].Seite1[0].#area[0].Kopfzeile[0].KG-Nr[0]",
+        "q": "ما هو رقم Kindergeld الخاص بك إن وجد؟",
+        "source": "verified",
+        "type": "text"
+      },
+      {
+        "field_id": "eite1[0].#area[0].Kopfzeile[0].#area[3].Telefon[0]",
+        "q": "ما هو رقم هاتفك للاتصال من قبل Familienkasse؟",
+        "source": "verified",
+        "type": "text"
+      },
+      {
+        "field_id": "eite1[0].#area[0].Überschrift[0].Anzahl-Anlagen[0]",
+        "q": "كم عدد ملاحق 'Anlage Kind' التي ترفقها مع هذا الطلب؟",
+        "source": "verified",
+        "type": "text"
+      },
+      {
+        "field_id": "Punkt-1[0].Pkt-1-Zeile-1[0].Titel-Antragsteller[0]",
+        "q": "لقبك الأكاديمي (إن وجد)؟",
+        "source": "verified",
+        "type": "text"
+      },
+      {
+        "field_id": ".Punkt-1[0].Pkt-1-Zeile-1[0].Name-Antragsteller[0]",
+        "q": "ما هو اسم عائلتك؟",
+        "source": "verified",
+        "type": "text"
+      }
+    ],
+    "tabelle1_preamble": "هذا القسم مخصص فقط للأطفال الذين تتلقى لهم بالفعل علاوة الأطفال (Kindergeld). إذا كان هذا هو طلبك الأول للحصول على Kindergeld، يمكنك تخطي هذه الحقول."
+  },
+  "tr": {
+    "support_level": 1,
+    "template_id": "familienkasse_kg1_v1",
+    "fill_strategy": "acroform",
+    "shown_count": 52,
+    "manual_count": 33,
+    "weak_questions": 0,
+    "ai_calls_made": 0,
+    "question_sources": {
+      "verified": 52,
+      "semantic": 0,
+      "ai": 0,
+      "deterministic": 0,
+      "label": 0,
+      "key": 0
+    },
+    "first_5_questions": [
+      {
+        "field_id": "ubform[0].Seite1[0].#area[0].Kopfzeile[0].KG-Nr[0]",
+        "q": "Mevcutsa Kindergeld referans numaranız nedir?",
+        "source": "verified",
+        "type": "text"
+      },
+      {
+        "field_id": "eite1[0].#area[0].Kopfzeile[0].#area[3].Telefon[0]",
+        "q": "Familienkasse geri arama için telefon numaranız nedir?",
+        "source": "verified",
+        "type": "text"
+      },
+      {
+        "field_id": "eite1[0].#area[0].Überschrift[0].Anzahl-Anlagen[0]",
+        "q": "Bu başvuruya kaç 'Anlage Kind' eki gönderiyorsunuz?",
+        "source": "verified",
+        "type": "text"
+      },
+      {
+        "field_id": "Punkt-1[0].Pkt-1-Zeile-1[0].Titel-Antragsteller[0]",
+        "q": "Akademik unvanınız (varsa)?",
+        "source": "verified",
+        "type": "text"
+      },
+      {
+        "field_id": ".Punkt-1[0].Pkt-1-Zeile-1[0].Name-Antragsteller[0]",
+        "q": "Soyadınız nedir?",
+        "source": "verified",
+        "type": "text"
+      }
+    ],
+    "tabelle1_preamble": "Bu bölüm yalnızca halihazırda Kindergeld aldığınız çocuklar içindir. Bu ilk Kindergeld başvurunuzsa, bu alanları atlayabilirsiniz."
+  },
+  "sq": {
+    "support_level": 1,
+    "template_id": "familienkasse_kg1_v1",
+    "fill_strategy": "acroform",
+    "shown_count": 52,
+    "manual_count": 33,
+    "weak_questions": 0,
+    "ai_calls_made": 0,
+    "question_sources": {
+      "verified": 52,
+      "semantic": 0,
+      "ai": 0,
+      "deterministic": 0,
+      "label": 0,
+      "key": 0
+    },
+    "first_5_questions": [
+      {
+        "field_id": "ubform[0].Seite1[0].#area[0].Kopfzeile[0].KG-Nr[0]",
+        "q": "Cili është numri juaj i referencës Kindergeld, nëse keni një të tillë?",
+        "source": "verified",
+        "type": "text"
+      },
+      {
+        "field_id": "eite1[0].#area[0].Kopfzeile[0].#area[3].Telefon[0]",
+        "q": "Cili është numri juaj i telefonit për thirrjet e Familienkasse?",
+        "source": "verified",
+        "type": "text"
+      },
+      {
+        "field_id": "eite1[0].#area[0].Überschrift[0].Anzahl-Anlagen[0]",
+        "q": "Sa shtojca 'Anlage Kind' po dërgoni me këtë aplikim?",
+        "source": "verified",
+        "type": "text"
+      },
+      {
+        "field_id": "Punkt-1[0].Pkt-1-Zeile-1[0].Titel-Antragsteller[0]",
+        "q": "Titulli juaj akademik (nëse ka)?",
+        "source": "verified",
+        "type": "text"
+      },
+      {
+        "field_id": ".Punkt-1[0].Pkt-1-Zeile-1[0].Name-Antragsteller[0]",
+        "q": "Cili është mbiemri juaj?",
+        "source": "verified",
+        "type": "text"
+      }
+    ],
+    "tabelle1_preamble": "Ky seksion është vetëm për fëmijët për të cilët merrni tashmë Kindergeld. Nëse kjo është aplikimi juaj i parë për Kindergeld, mund t'i kaloni këto fusha."
+  }
+}
