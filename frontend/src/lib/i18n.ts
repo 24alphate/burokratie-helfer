@@ -281,6 +281,16 @@ const STRINGS: Record<string, Dict> = {
   "yn.yes":                     { en: "Yes", de: "Ja", fr: "Oui", ar: "نعم", tr: "Evet", sq: "Po" },
   "yn.no":                      { en: "No", de: "Nein", fr: "Non", ar: "لا", tr: "Hayır", sq: "Jo" },
 
+  // ── Per-field needs-review notice ───────────────────────────────────────
+  "field.needs_review":         {
+    en: "⚠ Field detected from image — please verify the question matches your form.",
+    de: "⚠ Feld aus dem Bild erkannt — bitte prüfen Sie, ob die Frage zu Ihrem Formular passt.",
+    fr: "⚠ Champ détecté depuis l'image — vérifiez que la question correspond à votre formulaire.",
+    ar: "⚠ تم اكتشاف هذا الحقل من الصورة — يرجى التحقق من تطابق السؤال مع نموذجك.",
+    tr: "⚠ Alan görüntüden algılandı — sorunun formunuzla eşleştiğini doğrulayın.",
+    sq: "⚠ Fusha u zbulua nga imazhi — verifikoni që pyetja përputhet me formularin tuaj.",
+  },
+
   // ── OCR-promotion banner (Stage 4B) ─────────────────────────────────────
   "ocr.promotion_title":        { en: "These questions came from your scan", de: "Diese Fragen stammen aus Ihrem Scan", fr: "Ces questions proviennent de votre scan", ar: "هذه الأسئلة جاءت من المسح الضوئي", tr: "Bu sorular taramanızdan geldi", sq: "Këto pyetje vijnë nga skanimi juaj" },
   "ocr.promotion_body":         {

@@ -1015,28 +1015,88 @@ def field_map_to_defs(
         if document_language not in question_dict:
             question_dict[document_language] = entry.original_label
 
-        # ── Guidance injection ──────────────────────────────────────────────────
-        # If the field has no template guidance, inject guidance from the
-        # translation result (AI help text, example, format) and/or verified data.
-        effective_guidance = guidance
-        if effective_guidance is None:
-            plain = raw_explanation
-            fmt   = tr_format
-            ex    = tr_example
-            if plain or fmt or ex:
-                try:
-                    effective_guidance = GuidanceText(
-                        plain_language={user_language: plain} if plain else {},
-                        format_hint={user_language: fmt} if fmt else {},
-                        example={user_language: ex} if ex else {},
-                    )
-                except Exception:
-                    effective_guidance = None
+        # ── Guidance injection — Tier-A complete ────────────────────────────
+        # Every Tier-A locale must have help/example/format text whenever
+        # verified_questions has it, regardless of whether the template
+        # itself authored a per-locale GuidanceText. Strategy:
+        #   1. Start from the template's GuidanceText (may have en/de only).
+        #   2. For each Tier-A locale, look up the verified entry. If
+        #      verified has `help`/`example`/`format` for that locale AND
+        #      the corresponding GuidanceText slot is missing it, fill it in.
+        #   3. Always include the user_language slot (sourced from tr).
+        # Result: BuT (template authored en/de only) gains fr/ar/tr/sq help
+        # via verified_questions; KG1 (already complete) is unchanged.
+        plain_dict: dict[str, str] = {}
+        format_dict: dict[str, str] = {}
+        example_dict: dict[str, str] = {}
+        why_dict: dict[str, str] = {}
+        where_dict: dict[str, str] = {}
+        required_docs_dict: dict[str, list[str]] = {}
+        common_mistakes_dict: dict[str, list[str]] = {}
+        warning_dict: dict[str, str] = {}
+
+        if guidance is not None:
+            plain_dict.update(guidance.plain_language or {})
+            format_dict.update(guidance.format_hint or {})
+            example_dict.update(guidance.example or {})
+            why_dict.update(guidance.why_needed or {})
+            where_dict.update(guidance.where_to_find or {})
+            required_docs_dict.update(guidance.required_documents or {})
+            common_mistakes_dict.update(guidance.common_mistakes or {})
+            warning_dict.update(guidance.warning or {})
+
+        # Always seed user_language from this run's tr (AI/verified/semantic)
+        if raw_explanation:
+            plain_dict.setdefault(user_language, raw_explanation)
+        if tr_format:
+            format_dict.setdefault(user_language, tr_format)
+        if tr_example:
+            example_dict.setdefault(user_language, tr_example)
+
+        # Tier-A backfill from verified_questions per-locale entries
+        for loc in TIER_A:
+            vq = _lv_strict(entry.field_id, entry.original_label, loc)
+            if not vq:
+                continue
+            v_help = (vq.get("help") or "").strip()
+            v_example = (vq.get("example") or "").strip()
+            v_format = (vq.get("format") or "").strip()
+            if v_help and not plain_dict.get(loc):
+                plain_dict[loc] = v_help
+            if v_example and not example_dict.get(loc):
+                example_dict[loc] = v_example
+            if v_format and not format_dict.get(loc):
+                format_dict[loc] = v_format
+
+        any_guidance = (
+            plain_dict or format_dict or example_dict or why_dict or where_dict
+            or required_docs_dict or common_mistakes_dict or warning_dict
+        )
+        effective_guidance: Optional[GuidanceText] = None
+        if any_guidance:
+            try:
+                effective_guidance = GuidanceText(
+                    plain_language=plain_dict,
+                    format_hint=format_dict,
+                    example=example_dict,
+                    why_needed=why_dict,
+                    where_to_find=where_dict,
+                    required_documents=required_docs_dict,
+                    common_mistakes=common_mistakes_dict,
+                    warning=warning_dict,
+                )
+            except Exception:
+                effective_guidance = None
+
+        # ── Explanation dict — Tier-A complete ──────────────────────────────
+        # Mirrors plain_dict so QuestionCard.explanation_text and
+        # GuidancePanel.plain_language stay in sync.
+        explanation_dict = dict(plain_dict)
 
         defs.append(FieldDefinition(
             key=entry.field_id,
             question=question_dict,
-            explanation={user_language: raw_explanation},
+            explanation=explanation_dict,
             input_type=entry.field_type,
             options=options,
             original_label=entry.original_label,

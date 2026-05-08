@@ -739,6 +739,7 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
           currentKey={currentField.key}
           locale={locale}
           onJumpTo={(key) => setFocusedKey(key)}
+          supportLevel={supportLevel}
         />
 
         {/* Progress line */}
@@ -766,12 +767,13 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
           onSubmit={handleAnswer}
           isLoading={isLoading}
           validationErrors={submitError ? [submitError] : []}
-          submitLabel={SUBMIT[locale] ?? "Next →"}
+          submitLabel={SUBMIT[locale] ?? ti18n("q.next", locale)}
           options={currentField.options ?? []}
           needsReview={currentField.needs_review ?? false}
           originalLabel={currentField.original_label}
           fieldKey={currentField.key}
           guidance={currentField.guidance}
+          supportLevel={supportLevel}
         />
 
         {/* Phase E/E4 + E5 — privacy-first footer: honest copy + wipe link */}

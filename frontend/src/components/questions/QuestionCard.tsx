@@ -2,6 +2,7 @@
 
 import { QuestionRead, FieldOption, GuidanceText } from "@/types/api";
 import { resolveQuestionText } from "@/lib/labelUtils";
+import { t } from "@/lib/i18n";
 import { TextInput } from "./TextInput";
 import { DateInput } from "./DateInput";
 import { SelectInput } from "./SelectInput";
@@ -21,6 +22,8 @@ interface QuestionCardProps {
   originalLabel?: string;
   fieldKey?: string;
   guidance?: GuidanceText | null;
+  /** Used by resolveQuestionText to enforce strict Tier-A locale rules. */
+  supportLevel?: number | null;
 }
 
 export function QuestionCard({
@@ -35,8 +38,12 @@ export function QuestionCard({
   originalLabel = "",
   fieldKey = "",
   guidance,
+  supportLevel = null,
 }: QuestionCardProps) {
-  const questionText = resolveQuestionText(question.question_text, originalLabel, fieldKey, locale);
+  const questionText = resolveQuestionText(
+    question.question_text, originalLabel, fieldKey, locale,
+    { isLevel1: supportLevel === 1 },
+  );
   const explanationText =
     question.explanation_text?.[locale] ||
     question.explanation_text?.["en"] ||
@@ -68,7 +75,7 @@ export function QuestionCard({
 
       {needsReview && (
         <div className="mb-3 px-3 py-2 bg-yellow-50 border border-yellow-200 rounded-lg text-yellow-700 text-xs">
-          ⚠ Field detected from image — please verify the question matches your form.
+          {t("field.needs_review", locale)}
           {originalLabel && <span className="ml-1 font-mono">({originalLabel})</span>}
         </div>
       )}

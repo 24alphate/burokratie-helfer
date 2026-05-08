@@ -331,6 +331,10 @@ class TestLocaleQualityReporter:
             key="x",
             question={"en": "Q?", "de": "F?", "fr": "Q ?", "ar": "س؟", "tr": "S?", "sq": "P?"},
             original_label="Frage",
+            input_type="text",
+            question_source="verified",
+            guidance=None,
+            explanation={},
         )
         rep = build_locale_quality_report(
             shown_fields=[f],
@@ -351,6 +355,10 @@ class TestLocaleQualityReporter:
             key="x",
             question={"en": "Q?", "de": "F?"},  # missing fr/ar/tr/sq
             original_label="Frage",
+            input_type="text",
+            question_source="verified",
+            guidance=None,
+            explanation={},
         )
         rep = build_locale_quality_report(
             shown_fields=[f],
@@ -374,6 +382,10 @@ class TestLocaleQualityReporter:
             question={"en": "Q?", "de": "Frage", "fr": "Frage",
                       "ar": "س؟", "tr": "S?", "sq": "P?"},
             original_label="Frage",
+            input_type="text",
+            question_source="verified",
+            guidance=None,
+            explanation={},
         )
         rep = build_locale_quality_report(
             shown_fields=[f],
@@ -384,3 +396,124 @@ class TestLocaleQualityReporter:
         )
         assert rep["fallback_questions"] == 1
         assert rep["ready_for_locale"] is False
+
+    def test_arabic_question_without_arabic_script_is_wrong_language(self):
+        from app.services.locale_quality import build_locale_quality_report
+        from types import SimpleNamespace
+
+        # Arabic locale, but question text is Latin — must flag.
+        f = SimpleNamespace(
+            key="x",
+            question={"en": "Q?", "de": "F?", "fr": "Q ?",
+                      "ar": "Latin text only", "tr": "S?", "sq": "P?"},
+            original_label="Frage",
+            input_type="text",
+            question_source="verified",
+            guidance=None,
+            explanation={},
+        )
+        rep = build_locale_quality_report(
+            shown_fields=[f],
+            selected_locale="ar",
+            document_language="de",
+            extraction_source="verified_template",
+            support_level=1,
+        )
+        assert "x" in rep["wrong_language_questions"]
+        assert rep["per_locale"]["ar"]["ready_for_locale"] is False
+
+    def test_date_field_missing_example_blocks_ready(self):
+        from app.services.locale_quality import build_locale_quality_report
+        from types import SimpleNamespace
+        # No guidance.example for fr → date_missing_example → not ready.
+        guidance_obj = SimpleNamespace(
+            plain_language={}, format_hint={}, example={"en": "01.01.2026"},
+            why_needed={}, where_to_find={}, required_documents={}, common_mistakes={}, warning={},
+        )
+        f = SimpleNamespace(
+            key="d",
+            question={loc: f"Q[{loc}]" for loc in ("en","de","fr","ar","tr","sq")},
+            original_label="Datum",
+            input_type="date",
+            question_source="verified",
+            guidance=guidance_obj,
+            explanation={},
+        )
+        rep = build_locale_quality_report(
+            shown_fields=[f],
+            selected_locale="fr",
+            document_language="de",
+            extraction_source="verified_template",
+            support_level=1,
+        )
+        assert rep["per_locale"]["en"]["ready_for_locale"] is True
+        assert rep["per_locale"]["fr"]["ready_for_locale"] is False
+        assert "d" in rep["per_locale"]["fr"]["quality_required_gaps"]["date_missing_example"]
+
+
+class TestGuidanceCoveragePerTemplate:
+    """End-to-end: every shown field across both templates must have help in
+    the user's locale when at least 2 other Tier-A locales also have help."""
+
+    def test_BuT_help_coverage_better_than_zero_for_tier_a(self, client):
+        from io import BytesIO
+        from reportlab.pdfgen import canvas
+        from reportlab.lib.pagesizes import A4
+        buf = BytesIO()
+        c = canvas.Canvas(buf, pagesize=A4)
+        c.setFont("Helvetica", 11)
+        y = 800
+        for line in [
+            "Antrag auf Leistungen fur Bildung und Teilhabe",
+            "Persoenliche Angaben (Antragsteller/in)",
+            "Beantragte Leistung",
+            "Schuelerbefoerderung",
+            "Bildung und Teilhabe",
+            "Persönliche Angaben",
+            "Schülerbeförderung",
+        ]:
+            c.drawString(50, y, line)
+            y -= 22
+        c.save()
+        but = buf.getvalue()
+
+        for loc in TIER_A:
+            resp = client.post(
+                f"/api/v1/process-pdf?user_language={loc}",
+                files={"file": ("but.pdf", but, "application/pdf")},
+            )
+            assert resp.status_code == 200
+            body = resp.json()
+            shown = [f for f in body["fields"] if f.get("show_question")]
+            with_help = [
+                f for f in shown
+                if (f.get("guidance") or {}).get("plain_language", {}).get(loc)
+                or (f.get("explanation") or {}).get(loc)
+            ]
+            # After the Tier-A backfill, every Tier-A locale should have at
+            # least 12 fields with help (verified_questions floor for BuT).
+            assert len(with_help) >= 12, (
+                f"locale {loc}: only {len(with_help)}/{len(shown)} fields have help"
+            )
+
+    def test_kg1_help_coverage_constant_across_tier_a(self, client, kg1_pdf_bytes):
+        # KG1 was authored with full Tier-A coverage; the per-locale help count
+        # must be identical for every locale.
+        counts = {}
+        for loc in TIER_A:
+            resp = client.post(
+                f"/api/v1/process-pdf?user_language={loc}",
+                files={"file": ("kg1.pdf", kg1_pdf_bytes, "application/pdf")},
+            )
+            assert resp.status_code == 200
+            body = resp.json()
+            shown = [f for f in body["fields"] if f.get("show_question")]
+            counts[loc] = sum(
+                1 for f in shown
+                if (f.get("guidance") or {}).get("plain_language", {}).get(loc)
+            )
+        # All Tier-A locales should match (template authored consistently)
+        unique_counts = set(counts.values())
+        assert len(unique_counts) == 1, (
+            f"KG1 plain_language coverage varies across locales: {counts}"
+        )

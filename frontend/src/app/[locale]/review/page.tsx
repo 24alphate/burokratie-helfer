@@ -48,7 +48,7 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
     .filter((f) => safeAnswers[f.key] !== undefined)
     .map((f) => ({
       key:       f.key,
-      label:     resolveQuestionText(f.question, f.original_label, f.key, locale),
+      label:     resolveQuestionText(f.question, f.original_label, f.key, locale, { isLevel1: supportLevel === 1 }),
       origLabel: f.original_label,
       value:     safeAnswers[f.key],
       inputType: f.input_type,
@@ -257,7 +257,7 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
             </p>
             <div className="space-y-2">
               {unansweredFields.map((f) => {
-                const qText = resolveQuestionText(f.question, f.original_label, f.key, locale);
+                const qText = resolveQuestionText(f.question, f.original_label, f.key, locale, { isLevel1: supportLevel === 1 });
                 const globalIdx = questionFields.findIndex(q => q.key === f.key) + 1;
                 return (
                   <div key={f.key} className="flex items-center justify-between gap-3 bg-white rounded-lg px-3 py-2 border border-amber-200">

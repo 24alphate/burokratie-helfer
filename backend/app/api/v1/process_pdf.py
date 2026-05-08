@@ -622,6 +622,7 @@ async def process_pdf(
         document_language=document_language,
         extraction_source=extraction.extraction_source,
         support_level=extraction.support_level,
+        template_id=extraction.template_id,
     )
     log.info(
         "process-pdf LOCALE_QUALITY locale=%s ready=%s tier_a_ready=%s "

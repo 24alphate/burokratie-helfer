@@ -11,6 +11,8 @@ interface QuestionOverviewProps {
   currentKey: string | null;
   locale: string;
   onJumpTo: (key: string) => void;
+  /** Used by resolveQuestionText to enforce strict Tier-A locale rules. */
+  supportLevel?: number | null;
 }
 
 const TYPE_COLOR: Record<string, string> = {
@@ -59,6 +61,7 @@ const OF_LABEL: Record<string, string> = {
 
 export function QuestionOverview({
   questionFields, answeredKeys, answeredValues, currentKey, locale, onJumpTo,
+  supportLevel = null,
 }: QuestionOverviewProps) {
   const [open, setOpen] = useState(false);
 
@@ -96,7 +99,10 @@ export function QuestionOverview({
           {questionFields.map((field, idx) => {
             const isAnswered = answeredKeys.includes(field.key);
             const isCurrent  = field.key === currentKey;
-            const qText = resolveQuestionText(field.question, field.original_label, field.key, locale);
+            const qText = resolveQuestionText(
+              field.question, field.original_label, field.key, locale,
+              { isLevel1: supportLevel === 1 },
+            );
             const rawAnswer  = answeredValues[field.key];
 
             return (
