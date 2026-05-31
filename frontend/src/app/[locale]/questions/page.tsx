@@ -11,9 +11,11 @@ import { SupportLevelBanner } from "@/components/questions/SupportLevelBanner";
 import { ReviewWarning } from "@/components/questions/ReviewWarning";
 import { DeleteSavedData } from "@/components/layout/DeleteSavedData";
 import { PrivacyNote } from "@/components/layout/PrivacyNote";
+import { LegalFooter } from "@/components/layout/LegalFooter";
 import { useCaseStore } from "@/store/caseStore";
 import { api } from "@/lib/api";
 import { AnalysisReport, QuestionRead, FieldDefinition } from "@/types/api";
+import { getGroundedFields, getApplicableQuestionFields } from "@/lib/applicableFields";
 import { cleanHumanLabel } from "@/lib/labelUtils";
 import { t as ti18n } from "@/lib/i18n";
 
@@ -303,9 +305,7 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
   // ── HARD GROUNDING GUARD ──────────────────────────────────────────────────
   // Every question must have its key in the authoritative extractedFieldIds list.
   // If extractedFieldIds is empty, block all questions.
-  const groundedFields = safeExtracted.length > 0
-    ? safeFields.filter((f) => safeExtracted.includes(f.key))
-    : [];
+  const groundedFields = getGroundedFields(safeFields, safeExtracted);
 
   const blockedByGuard = safeFields.filter(
     (f) => !safeExtracted.includes(f.key)
@@ -319,7 +319,11 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
     );
   }
 
-  const questionFields  = groundedFields.filter((f) => f.show_question !== false && !f.is_prefilled);
+  // Phase v2 — questionFields is the *applicable* set: grounded, shown, not
+  // prefilled, and whose conditional gate is satisfied by the current answers.
+  // Recomputed every render from answeredValues, so the flow shrinks/grows as
+  // gating answers (marital status, account holder) change.
+  const questionFields  = getApplicableQuestionFields(safeFields, safeExtracted, answeredValues ?? {});
   const blockedFields   = groundedFields.filter((f) => f.show_question === false);
   const unanswered      = questionFields.filter((f) => !safeAnswered.includes(f.key));
   const nextField       = unanswered[0] ?? null;
@@ -780,6 +784,7 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
         <div className="mt-8 pt-4 border-t border-gray-100 flex flex-col items-center gap-3">
           <PrivacyNote locale={locale} className="text-center text-xs text-gray-500 leading-relaxed max-w-md" />
           <DeleteSavedData locale={locale} compact />
+          <LegalFooter locale={locale} className="flex items-center justify-center gap-4 text-xs text-gray-400" />
         </div>
 
         {/* Always-visible debug panel — shows grounding proof and question quality */}

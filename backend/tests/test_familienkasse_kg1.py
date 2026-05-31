@@ -48,7 +48,9 @@ from app.services.form_templates.familienkasse_kg1 import (
     W_BANK_OWNER_APP, W_BANK_OWNER_OTH,
     # logical radio field IDs
     LOGICAL_FAMILIENSTAND, LOGICAL_BANK_OWNER,
-    # manual widgets
+    # logical split field IDs (Phase v2 — Steuer-ID)
+    LOGICAL_APP_STEUER_ID, LOGICAL_PRT_STEUER_ID,
+    # raw Steuer-ID comb widgets (split targets, not user-facing)
     W_APP_STEUER_ID_1, W_APP_STEUER_ID_2, W_APP_STEUER_ID_3, W_APP_STEUER_ID_4,
     W_PRT_STEUER_ID_1, W_PRT_STEUER_ID_2, W_PRT_STEUER_ID_3, W_PRT_STEUER_ID_4,
     # tabelle helper
@@ -62,8 +64,11 @@ KG1_PDF_PATH = os.path.join(
     "templates_source", "familienkasse_kg1_v1.pdf",
 )
 EXPECTED_PAGES = 5
-EXPECTED_SHOWN = 52
-EXPECTED_MANUAL = 33
+# Phase v2 — Steuer-ID became 2 logical split questions (applicant + partner)
+# instead of 8 hidden manual widgets: shown 52→54, manual 33→25 (only the 25
+# Tabelle-2 Zählkinder widgets remain manual).
+EXPECTED_SHOWN = 54
+EXPECTED_MANUAL = 25
 
 
 @pytest.fixture(scope="module")
@@ -131,13 +136,13 @@ class TestKg1ProcessRoute:
         # public advertisement normalizes to "acroform" for the user.
         assert self.report["fill_strategy"] == "acroform"
 
-    def test_shown_count_is_52(self):
+    def test_shown_count_matches_expected(self):
         shown = [f for f in self.fields if f.get("show_question")]
         assert len(shown) == EXPECTED_SHOWN, (
             f"Expected {EXPECTED_SHOWN} shown KG1 questions, got {len(shown)}"
         )
 
-    def test_manual_count_is_33(self):
+    def test_manual_count_matches_expected(self):
         manual = [f for f in self.fields if not f.get("show_question")]
         assert len(manual) == EXPECTED_MANUAL, (
             f"Expected {EXPECTED_MANUAL} manual fields, got {len(manual)}"
@@ -181,6 +186,75 @@ class TestKg1ProcessRoute:
         assert bad == [], (
             f"Shown KG1 fields with non-verified source: {bad}"
         )
+
+
+# ── Phase v2 — Conditional question flow ─────────────────────────────────────
+
+class TestKg1ConditionalGating:
+    """
+    Conditions are attached to the right fields by the backend and evaluated
+    client-side. Here we assert the backend wiring, and we re-run the exact
+    condition semantics (FormEngine.evaluate_condition) to prove the intended
+    show/hide outcome for the `ledig` vs `verheiratet` personas.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, client, kg1_pdf_bytes):
+        self.fields = _process(client, kg1_pdf_bytes, "en")["fields"]
+        self.by_key = {f["key"]: f for f in self.fields}
+
+    def _cond(self, key):
+        return self.by_key[key].get("condition")
+
+    def test_partner_fields_gated_on_has_partner(self):
+        for k in (LOGICAL_PRT_STEUER_ID, W_PRT_NAME, W_PRT_VORNAME,
+                  W_PRT_GEB_DATUM, W_PRT_ANSCHRIFT):
+            c = self._cond(k)
+            assert c and c["type"] == "field_in"
+            assert c["field_key"] == LOGICAL_FAMILIENSTAND
+            assert set(c["values"]) == {"verheiratet", "Lebenspartnerschaft"}
+
+    def test_fs_seit_gated_on_not_ledig(self):
+        c = self._cond(W_FS_SEIT)
+        assert c and c["type"] == "field_not_equals"
+        assert c["field_key"] == LOGICAL_FAMILIENSTAND and c["value"] == "ledig"
+
+    def test_abweichende_person_gated_on_other_account(self):
+        for k in (W_AP_NAME, W_AP_VORNAME, W_AP_ANSCHRIFT, W_BANK_OWNER_NAME):
+            c = self._cond(k)
+            assert c and c["type"] == "field_equals"
+            assert c["field_key"] == LOGICAL_BANK_OWNER and c["value"] == "andere Person"
+
+    def test_core_fields_have_no_condition(self):
+        for k in (W_APP_VORNAME, W_APP_NAME, LOGICAL_APP_STEUER_ID,
+                  W_BANK_IBAN, LOGICAL_FAMILIENSTAND):
+            assert self._cond(k) is None
+
+    def test_ledig_persona_hides_partner_and_seit(self):
+        from app.services.form_engine import form_engine
+        answers = {LOGICAL_FAMILIENSTAND: "ledig", LOGICAL_BANK_OWNER: "Antragsteller"}
+        shown = [
+            f for f in self.fields
+            if f.get("show_question")
+            and form_engine.evaluate_condition(f.get("condition"), answers)
+        ]
+        shown_keys = {f["key"] for f in shown}
+        assert W_FS_SEIT not in shown_keys
+        assert LOGICAL_PRT_STEUER_ID not in shown_keys
+        assert W_PRT_NAME not in shown_keys
+        assert W_AP_NAME not in shown_keys
+        # Core fields remain
+        assert {W_APP_VORNAME, W_APP_NAME, LOGICAL_APP_STEUER_ID} <= shown_keys
+
+    def test_verheiratet_other_account_persona_shows_gated_sections(self):
+        from app.services.form_engine import form_engine
+        answers = {LOGICAL_FAMILIENSTAND: "verheiratet", LOGICAL_BANK_OWNER: "andere Person"}
+        shown_keys = {
+            f["key"] for f in self.fields
+            if f.get("show_question")
+            and form_engine.evaluate_condition(f.get("condition"), answers)
+        }
+        assert {W_FS_SEIT, LOGICAL_PRT_STEUER_ID, W_PRT_NAME, W_AP_NAME} <= shown_keys
 
 
 # ── F6/2 — Basic AcroForm fill round-trip ────────────────────────────────────
@@ -311,10 +385,10 @@ class TestKg1BankAccountHolderRadio:
 
 class TestKg1ManualWidgetsStayBlank:
     """
-    The 8 Steuer-ID widgets and 25 Tabelle-2 Zählkinder widgets are
-    confidence=0.5 / show_question=False per Phase F1 scope. The user
-    cannot answer them through the UI. After a normal fill (without
-    sending those keys), the output PDF must have them blank (no /V).
+    The 8 Steuer-ID comb widgets (Phase v2 split targets) and 25 Tabelle-2
+    Zählkinder widgets (manual) are never written by a normal fill that does
+    not supply the logical Steuer-ID answer. After such a fill the output PDF
+    must have all of them blank (no /V).
     """
 
     @pytest.fixture(autouse=True)
@@ -411,28 +485,40 @@ class TestKg1Grounding:
         resp = _fill(self.client, self.token, {W_FS_LEDIG: "Yes"})
         assert resp.status_code == 400
 
-    def test_manual_widget_id_is_in_extracted_field_ids(self):
-        # Documented behavior: manual (confidence=0.5) widgets DO appear
-        # in extracted_field_ids today (the template's get_field_map
-        # returns them). The UI does not surface them as questions, but
-        # if a client manually crafted a request with one of these keys,
-        # the grounding guard would accept it. We document this rather
-        # than ship a hidden surface.
-        assert W_APP_STEUER_ID_1 in self.extracted_ids
+    def test_raw_steuer_id_widget_not_in_extracted_field_ids(self):
+        # Phase v2 — the four raw Steuer-ID comb widgets are now split targets,
+        # known only to get_split_fields(). Like raw radio widgets, they MUST
+        # NOT appear in the user-visible field map.
+        for w in (W_APP_STEUER_ID_1, W_APP_STEUER_ID_2,
+                  W_APP_STEUER_ID_3, W_APP_STEUER_ID_4,
+                  W_PRT_STEUER_ID_1, W_PRT_STEUER_ID_2,
+                  W_PRT_STEUER_ID_3, W_PRT_STEUER_ID_4):
+            assert w not in self.extracted_ids, (
+                f"Raw Steuer-ID widget {w!r} leaked into extracted_field_ids"
+            )
 
-    def test_manual_widget_answer_is_accepted_by_grounding_guard(self):
-        # Companion to the test above. Client-crafted answers for manual
-        # widgets pass the grounding guard and reach the fill engine.
-        # This is an acknowledged surface, not a security issue: the
-        # widget is real, the value is the user's own input, and there's
-        # no UI that produces these keys.
+    def test_raw_steuer_id_widget_answer_rejected_400(self):
+        # A client crafting an answer for a raw split widget is rejected by the
+        # grounding guard — only the logical field is a valid answer key.
+        resp = _fill(self.client, self.token, {W_APP_STEUER_ID_1: "12"})
+        assert resp.status_code == 400
+
+    def test_logical_steuer_id_in_extracted_field_ids(self):
+        # The logical Steuer-ID question IS a valid, grounded answer key.
+        assert LOGICAL_APP_STEUER_ID in self.extracted_ids
+        assert LOGICAL_PRT_STEUER_ID in self.extracted_ids
+
+    def test_logical_steuer_id_round_trips_into_comb_widgets(self):
+        # Answering the single logical question fills the four comb widgets
+        # with the 2/3/3/3 slices of the 11-digit number.
         resp = _fill(self.client, self.token,
-                     {W_APP_STEUER_ID_1: "12345678901"})
+                     {LOGICAL_APP_STEUER_ID: "12 345 678 901"})
         assert resp.status_code == 200
-        # The value is written to the widget (the engine doesn't
-        # double-check show_question at fill time).
         rb = _readback(resp.content)
-        assert rb.get(W_APP_STEUER_ID_1) == "12345678901"
+        assert rb.get(W_APP_STEUER_ID_1) == "12"
+        assert rb.get(W_APP_STEUER_ID_2) == "345"
+        assert rb.get(W_APP_STEUER_ID_3) == "678"
+        assert rb.get(W_APP_STEUER_ID_4) == "901"
 
 
 # ── F6/7 — Output safety (mock failures) ─────────────────────────────────────

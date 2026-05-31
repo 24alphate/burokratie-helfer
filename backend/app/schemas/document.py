@@ -47,6 +47,12 @@ class FieldDefinition(BaseModel):
     # ── Question quality metadata ──────────────────────────────────────────────
     question_source: str = ""  # "verified" | "semantic" | "ai" | "deterministic" | "label" | "key"
     question_weak_reasons: list[str] = []  # quality checker flags
+    # ── Conditional flow (Phase v2) ────────────────────────────────────────────
+    # When set, the frontend only shows this question if the condition holds
+    # against the user's current answers. Schema mirrors FormEngine.evaluate_condition
+    # (field_equals / field_not_equals / field_in / field_not_in / and / or).
+    # None = always show. The PDF widget value is never affected by this field.
+    condition: Optional[dict] = None
 
 
 class AnalysisReport(BaseModel):

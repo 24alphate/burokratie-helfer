@@ -70,7 +70,22 @@ export interface FieldDefinition {
   // ── Question quality metadata ─────────────────────────────────────────────
   question_source?: string;           // "verified" | "semantic" | "ai" | "deterministic" | "label" | "key"
   question_weak_reasons?: string[];
+  // ── Conditional flow (Phase v2) ───────────────────────────────────────────
+  // When present, the question is only shown if this condition holds against
+  // the user's current answers (evaluated by lib/conditions.ts). null/absent =
+  // always show. Never affects what is written to the PDF widget.
+  condition?: FieldCondition | null;
 }
+
+// Conditional-flow rule mirroring the backend FormEngine.evaluate_condition.
+// A leaf compares one field's answer; `and`/`or` nest child conditions.
+export type FieldCondition =
+  | { type: "field_equals"; field_key: string; value: string }
+  | { type: "field_not_equals"; field_key: string; value: string }
+  | { type: "field_in"; field_key: string; values: string[] }
+  | { type: "field_not_in"; field_key: string; values: string[] }
+  | { type: "and"; conditions: FieldCondition[] }
+  | { type: "or"; conditions: FieldCondition[] };
 
 // Accuracy report included with every field extraction
 export interface AnalysisReport {

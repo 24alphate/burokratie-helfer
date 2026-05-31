@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import { useCaseStore } from "@/store/caseStore";
 import { ConfirmModal } from "@/components/layout/ConfirmModal";
 import { PrivacyNote } from "@/components/layout/PrivacyNote";
+import { LegalFooter } from "@/components/layout/LegalFooter";
 import { t } from "@/lib/i18n";
 
 const LANGUAGES = [
@@ -242,6 +243,9 @@ export default function LandingPage() {
             className="text-center text-xs text-gray-500 leading-relaxed"
           />
         </div>
+
+        {/* German-law mandated Impressum + Datenschutz links */}
+        <LegalFooter locale={selectedLocale ?? cardLocale} />
       </div>
 
       {/* Start-new confirmation when a saved form exists */}

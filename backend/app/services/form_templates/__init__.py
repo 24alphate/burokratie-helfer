@@ -120,6 +120,43 @@ class RadioGroup:
     options: list[tuple[str, str]] = field(default_factory=list)
 
 
+# ── SplitField: one logical text question → several char-sliced widgets ──────
+
+@dataclass
+class SplitField:
+    """
+    Phase v2 — Express a value that the PDF splits across several adjacent
+    widgets (e.g. the 11-digit Steuer-Identifikationsnummer on KG1, laid out
+    as four comb boxes of 2 / 3 / 3 / 3 chars) as a SINGLE user-facing text
+    question.
+
+    Why: asking "digits 1-2 of your tax ID", "digits 3-5", … is hostile UX.
+    The user answers once; the fill step strips non-digits and slices the
+    value across the widgets according to `slices`.
+
+    Scope: verified templates only (Level 1). Mirrors RadioGroup — the logical
+    `field_id` is the only thing the user sees / answers and the only thing
+    that appears in get_field_map(); the raw `widget_names` are known solely
+    to the engine and never enter extracted_field_ids.
+
+    Fields:
+        field_id      Logical field the user answers. MUST appear in
+                      get_field_map() as field_type="text".
+        widget_names  Ordered PDF widget names that receive the slices.
+        slices        Chars written to each widget, in order. len(slices)
+                      MUST equal len(widget_names); sum(slices) is the
+                      expected cleaned-answer length (e.g. 11 for a Steuer-ID).
+
+    Hard rules enforced by validate_template():
+        - len(slices) == len(widget_names)
+        - field_id appears in get_field_map() with field_type="text"
+        - widget_names are unique across all radio groups AND split fields
+    """
+    field_id: str
+    widget_names: list[str]
+    slices: list[int] = field(default_factory=list)
+
+
 # ── VerifiedTemplate ABC ──────────────────────────────────────────────────────
 
 class VerifiedTemplate(ABC):
@@ -165,6 +202,15 @@ class VerifiedTemplate(ABC):
 
         Only consulted by /fill-pdf when fill_strategy == "acroform".
         Default empty list preserves all existing template behavior.
+        """
+        return []
+
+    def get_split_fields(self) -> list[SplitField]:
+        """
+        Phase v2 — Return zero or more SplitField definitions.
+
+        Consulted by /fill-pdf's expand_logical_fields() for acroform-style
+        fill strategies. Default empty list preserves existing behavior.
         """
         return []
 
@@ -262,6 +308,28 @@ def validate_template(t: VerifiedTemplate) -> list[str]:
             for w in rg.widget_names:
                 if w in seen_widgets:
                     errors.append(f"RADIO_GROUP_DUPLICATE_WIDGET: {w}")
+                seen_widgets.add(w)
+
+    # Phase v2 — split_field invariants (only when the template defines any)
+    split_fields = list(getattr(t, "get_split_fields", lambda: [])())
+    if split_fields:
+        text_field_ids = {f.field_id for f in field_map if f.field_type == "text"}
+        for sf in split_fields:
+            # 1. The logical field_id must appear in the field_map as text
+            if sf.field_id not in text_field_ids:
+                errors.append(
+                    f"SPLIT_FIELD_MISSING_TEXT_FIELD: {sf.field_id} not in get_field_map() as field_type='text'"
+                )
+            # 2. slices must align 1:1 with widget_names
+            if len(sf.slices) != len(sf.widget_names):
+                errors.append(
+                    f"SPLIT_FIELD_SLICE_MISMATCH: {sf.field_id} has {len(sf.slices)} slices "
+                    f"for {len(sf.widget_names)} widgets"
+                )
+            # 3. Widget names must be unique across radio groups AND split fields
+            for w in sf.widget_names:
+                if w in seen_widgets:
+                    errors.append(f"SPLIT_FIELD_DUPLICATE_WIDGET: {w}")
                 seen_widgets.add(w)
 
     return errors

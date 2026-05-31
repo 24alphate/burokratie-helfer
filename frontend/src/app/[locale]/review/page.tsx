@@ -7,8 +7,10 @@ import { StepProgress } from "@/components/layout/StepProgress";
 import { ConfirmModal } from "@/components/layout/ConfirmModal";
 import { useCaseStore } from "@/store/caseStore";
 import { api } from "@/lib/api";
+import { getApplicableQuestionFields, getApplicableAnswers } from "@/lib/applicableFields";
 import { resolveQuestionText } from "@/lib/labelUtils";
 import { OutputGuarantee } from "@/components/questions/OutputGuarantee";
+import { LegalFooter } from "@/components/layout/LegalFooter";
 import { t } from "@/lib/i18n";
 
 export default function ReviewPage({ params }: { params: { locale: string } }) {
@@ -38,19 +40,21 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
   const safeAnswers   = answeredValues ?? {};
   const safeExtracted = extractedFieldIds ?? [];
 
-  const groundedFields   = safeExtracted.length > 0
-    ? safeFields.filter(f => safeExtracted.includes(f.key))
-    : [];
-  const questionFields   = groundedFields.filter(f => f.show_question !== false && !f.is_prefilled);
-  const unansweredFields = questionFields.filter(f => safeAnswers[f.key] === undefined);
+  // Phase v2 — only consider questions/answers that are currently applicable
+  // given the conditional flow. applicableAnswers is also what we send to
+  // /fill-pdf, so a stale answer (e.g. partner data after switching to "ledig")
+  // is never written to the PDF.
+  const questionFields    = getApplicableQuestionFields(safeFields, safeExtracted, safeAnswers);
+  const applicableAnswers = getApplicableAnswers(safeFields, safeExtracted, safeAnswers);
+  const unansweredFields  = questionFields.filter(f => applicableAnswers[f.key] === undefined);
 
   const answeredList = safeFields
-    .filter((f) => safeAnswers[f.key] !== undefined)
+    .filter((f) => applicableAnswers[f.key] !== undefined)
     .map((f) => ({
       key:       f.key,
       label:     resolveQuestionText(f.question, f.original_label, f.key, locale, { isLevel1: supportLevel === 1 }),
       origLabel: f.original_label,
-      value:     safeAnswers[f.key],
+      value:     applicableAnswers[f.key],
       inputType: f.input_type,
     }));
 
@@ -69,7 +73,7 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
       setError(t("review.no_token", locale));
       return;
     }
-    if (Object.keys(safeAnswers).length === 0) {
+    if (Object.keys(applicableAnswers).length === 0) {
       setError(t("review.no_answers", locale));
       return;
     }
@@ -79,7 +83,8 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
       const fieldLabels: Record<string, string> = {};
       safeFields.forEach((f) => { fieldLabels[f.key] = f.original_label || f.key; });
 
-      const { blob, notFillable: nf, strategy } = await api.fillPdf(pdfToken, safeAnswers, fieldLabels);
+      // Send only currently-applicable answers — never stale conditional data.
+      const { blob, notFillable: nf, strategy } = await api.fillPdf(pdfToken, applicableAnswers, fieldLabels);
 
       const nfLabels = nf.map((id) => {
         const field = safeFields.find((f) => f.key === id);
@@ -302,6 +307,8 @@ export default function ReviewPage({ params }: { params: { locale: string } }) {
         <div className="mt-6 p-4 bg-amber-50 border border-amber-200 rounded-xl">
           <p className="text-amber-800 text-sm leading-relaxed">{t("review.disclaimer", locale)}</p>
         </div>
+
+        <LegalFooter locale={locale} />
       </main>
 
       {showNewDocModal && (
