@@ -67,6 +67,62 @@ def _smart_filename(template_id: str | None, original_filename: str) -> str:
 router = APIRouter(tags=["stateless"])
 
 
+def expand_logical_fields(template, answers: dict[str, str]) -> dict[str, str]:
+    """
+    Expand a verified template's logical fields into per-widget writes for the
+    AcroForm fill paths. Two mechanisms, both used by KG1:
+
+      RadioGroup — one chosen value → "Yes" on the chosen widget, "Off" on
+                   every sibling (Adobe's on/off representation).
+      SplitField — one value (e.g. an 11-digit Steuer-ID) → char-sliced across
+                   N comb widgets. Non-digits are stripped first; if the cleaned
+                   length doesn't match sum(slices) we skip the group rather than
+                   write a garbled partial number.
+
+    The logical field_id is popped from the result; only real PDF widget names
+    remain. Shared by the 'acroform' (PyPDF) and 'fitz_acroform' branches so the
+    two paths can never drift apart.
+    """
+    expanded = dict(answers)
+
+    # ── Radio groups ──────────────────────────────────────────────────────────
+    for rg in list(getattr(template, "get_radio_groups", lambda: [])()):
+        chosen = expanded.pop(rg.field_id, None)
+        selected_widget = None
+        if chosen is not None:
+            for value, widget in rg.options:
+                if value == chosen:
+                    selected_widget = widget
+                    break
+            if selected_widget is None:
+                log.warning(
+                    "fill-pdf RADIO_GROUP_VALUE_NOT_IN_OPTIONS field_id=%s value=%r",
+                    rg.field_id, chosen,
+                )
+        for widget_name in rg.widget_names:
+            expanded[widget_name] = "Yes" if widget_name == selected_widget else "Off"
+
+    # ── Split fields ──────────────────────────────────────────────────────────
+    for sf in list(getattr(template, "get_split_fields", lambda: [])()):
+        raw = expanded.pop(sf.field_id, None)
+        if raw is None or not str(raw).strip():
+            continue  # unanswered / blank → leave every target widget empty
+        digits = re.sub(r"\D", "", str(raw))
+        expected = sum(sf.slices)
+        if len(digits) != expected:
+            log.warning(
+                "fill-pdf SPLIT_FIELD_LENGTH_MISMATCH field_id=%s got=%d expected=%d",
+                sf.field_id, len(digits), expected,
+            )
+            continue  # refuse to write a partial / wrong-length number
+        pos = 0
+        for widget_name, n in zip(sf.widget_names, sf.slices):
+            expanded[widget_name] = digits[pos:pos + n]
+            pos += n
+
+    return expanded
+
+
 class FillPdfRequest(BaseModel):
     pdf_token: str
     answers: dict[str, str]               # field_id → raw answer
@@ -203,36 +259,13 @@ async def fill_pdf(body: FillPdfRequest):
                 from app.services.pdf_generator.base import PDFGenerationRequest
                 from app.services.pdf_generator.pypdf_generator import PyPDFGenerator
 
-                # Phase F1 — expand radio_group logical answers into per-widget
-                # Yes/Off writes BEFORE handing off to PyPDFGenerator. The
-                # logical field_id stays in extracted_field_ids (so the
-                # grounding guard above accepts it), but the actual PDF widgets
-                # never appear in extracted_field_ids — only the engine knows
-                # about them via template.get_radio_groups().
-                radio_groups = list(getattr(template, "get_radio_groups", lambda: [])())
-                expanded_answers = dict(body.answers)
-                for rg in radio_groups:
-                    chosen = expanded_answers.pop(rg.field_id, None)
-                    selected_widget = None
-                    if chosen is not None:
-                        for value, widget in rg.options:
-                            if value == chosen:
-                                selected_widget = widget
-                                break
-                        if selected_widget is None:
-                            log.warning(
-                                "fill-pdf RADIO_GROUP_VALUE_NOT_IN_OPTIONS "
-                                "template_id=%s field_id=%s value=%r",
-                                template_id, rg.field_id, chosen,
-                            )
-                    # Always write Off to every sibling first; if a selection
-                    # was made, overwrite the chosen widget with Yes. If the
-                    # user didn't answer this radio group at all (chosen is
-                    # None), every widget stays Off — same as Adobe behavior.
-                    for widget_name in rg.widget_names:
-                        expanded_answers[widget_name] = (
-                            "Yes" if widget_name == selected_widget else "Off"
-                        )
+                # Phase F1 + v2 — expand logical fields (radio groups + split
+                # fields like the Steuer-ID) into per-widget writes BEFORE
+                # handing off to PyPDFGenerator. The logical field_id stays in
+                # extracted_field_ids (so the grounding guard above accepts it),
+                # but the actual PDF widgets never appear in extracted_field_ids
+                # — only the engine knows about them via the template.
+                expanded_answers = expand_logical_fields(template, body.answers)
 
                 _generator = PyPDFGenerator()
                 tmp_fd, tmp_path = tempfile.mkstemp(suffix=".pdf")
@@ -332,29 +365,10 @@ async def fill_pdf(body: FillPdfRequest):
             # have no /AP appearance dict — PyPDF can't write to those;
             # fitz can.
             if template_fill_strategy == "fitz_acroform":
-                # Reuse the same radio_group expansion logic as the PyPDF
-                # branch above. It runs BEFORE the actual fill so the
-                # downstream filler only sees per-widget Yes/Off writes.
-                radio_groups = list(getattr(template, "get_radio_groups", lambda: [])())
-                expanded_answers = dict(body.answers)
-                for rg in radio_groups:
-                    chosen = expanded_answers.pop(rg.field_id, None)
-                    selected_widget = None
-                    if chosen is not None:
-                        for value, widget in rg.options:
-                            if value == chosen:
-                                selected_widget = widget
-                                break
-                        if selected_widget is None:
-                            log.warning(
-                                "fill-pdf RADIO_GROUP_VALUE_NOT_IN_OPTIONS "
-                                "template_id=%s field_id=%s value=%r",
-                                template_id, rg.field_id, chosen,
-                            )
-                    for widget_name in rg.widget_names:
-                        expanded_answers[widget_name] = (
-                            "Yes" if widget_name == selected_widget else "Off"
-                        )
+                # Same logical-field expansion as the PyPDF branch (radio groups
+                # + split fields). Runs BEFORE the fill so the downstream filler
+                # only ever sees real per-widget writes.
+                expanded_answers = expand_logical_fields(template, body.answers)
 
                 from app.services.pdf_generator.fitz_acroform_fill import (
                     fill_acroform_via_fitz,

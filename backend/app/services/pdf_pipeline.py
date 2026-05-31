@@ -173,6 +173,13 @@ class FieldMapEntry:
     reason: str = "pdf_field"   # "pdf_field" | "derived_helper"
     guidance: Optional[dict] = None      # GuidanceText dict from verified template (never affects field_id/filling)
     semantic_key: Optional[str] = None   # e.g. "applicant.full_name" — for future answer reuse
+    # Conditional-flow gate (Phase v2). When set, the question is only shown if
+    # the condition evaluates True against the user's current answers. Uses the
+    # same schema as FormEngine.evaluate_condition: field_equals / field_not_equals
+    # / field_in / field_not_in / and / or. Evaluated CLIENT-SIDE in the stateless
+    # pipeline (see frontend lib/conditions.ts) and re-applied at fill time when
+    # the review page filters answers to currently-applicable fields.
+    condition: Optional[dict] = None
 
 
 @dataclass
@@ -1113,6 +1120,7 @@ def field_map_to_defs(
             guidance=effective_guidance,
             semantic_key=entry.semantic_key,
             question_source=resolved_source,
+            condition=entry.condition,
         ))
     return defs
 

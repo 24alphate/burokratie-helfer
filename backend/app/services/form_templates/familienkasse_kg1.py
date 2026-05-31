@@ -42,7 +42,7 @@ VERIFIED_BY_FIELD_ID. weak_questions=0 invariant must hold.
 """
 from __future__ import annotations
 
-from app.services.form_templates import RadioGroup, VerifiedTemplate
+from app.services.form_templates import RadioGroup, SplitField, VerifiedTemplate
 
 
 # ── Widget name constants (fully-qualified XFA path; matches PyPDF /T) ───────
@@ -132,6 +132,44 @@ W_DATUM_2         = "topmostSubform[0].Page2[0].Unterschrift-2[0].Datum-2[0]"
 LOGICAL_FAMILIENSTAND   = "kg1_applicant_marital_status"
 LOGICAL_BANK_OWNER      = "kg1_bank_account_holder"
 
+# Phase v2 — logical split fields (one user question → several comb widgets).
+# The 11-digit Steuer-ID is laid out on the PDF as 4 comb boxes (2/3/3/3).
+LOGICAL_APP_STEUER_ID   = "kg1_applicant_steuer_id"
+LOGICAL_PRT_STEUER_ID   = "kg1_partner_steuer_id"
+
+# Slice plan for both Steuer-ID groups, verified against the PDF widgets'
+# /MaxLen (2, 3, 3, 3 — comb fields). sum == 11 == length of a German IdNr.
+_STEUER_ID_SLICES = [2, 3, 3, 3]
+
+
+# ── Conditional-flow gates (Phase v2) ────────────────────────────────────────
+# Schema mirrors FormEngine.evaluate_condition. Evaluated client-side in the
+# stateless pipeline; re-applied at fill time when the review page filters
+# answers to currently-applicable fields.
+
+# Punkt 2 (partner) is shown ONLY for applicants who currently have a spouse /
+# registered partner. Scope decision: verheiratet + Lebenspartnerschaft only.
+_COND_HAS_PARTNER = {
+    "type": "field_in",
+    "field_key": LOGICAL_FAMILIENSTAND,
+    "values": ["verheiratet", "Lebenspartnerschaft"],
+}
+
+# "Familienstand seit" only makes sense once the status is not 'ledig'.
+_COND_NOT_LEDIG = {
+    "type": "field_not_equals",
+    "field_key": LOGICAL_FAMILIENSTAND,
+    "value": "ledig",
+}
+
+# Punkt 4 (abweichende Person) only when the Kindergeld account belongs to
+# someone other than the applicant.
+_COND_OTHER_ACCOUNT = {
+    "type": "field_equals",
+    "field_key": LOGICAL_BANK_OWNER,
+    "value": "andere Person",
+}
+
 
 # ── Semantic key inferences (best-effort, optional) ─────────────────────────
 
@@ -195,7 +233,7 @@ class FamilienkasseKg1Template(VerifiedTemplate):
     def get_field_map(self) -> list:
         from app.services.pdf_pipeline import FieldMapEntry
 
-        def auto(field_id, label, ftype, page, opts=None, src_text=None):
+        def auto(field_id, label, ftype, page, opts=None, src_text=None, condition=None):
             """Build an auto-fill FieldMapEntry (confidence=1.0, shown)."""
             return FieldMapEntry(
                 field_id=field_id,
@@ -209,6 +247,7 @@ class FamilienkasseKg1Template(VerifiedTemplate):
                 source_text=src_text or label,
                 reason="pdf_field",
                 semantic_key=_SEMANTIC_KEYS.get(field_id),
+                condition=condition,
             )
 
         def manual(field_id, label, page, src_text=None):
@@ -241,10 +280,12 @@ class FamilienkasseKg1Template(VerifiedTemplate):
                  src_text="Anzahl beigefügter Anlagen"),
 
             # ── Punkt 1 — Antragsteller (Page 1) ─────────────────────────
-            manual(W_APP_STEUER_ID_1, "Steuer-ID Block 1", 1),
-            manual(W_APP_STEUER_ID_2, "Steuer-ID Block 2", 1),
-            manual(W_APP_STEUER_ID_3, "Steuer-ID Block 3", 1),
-            manual(W_APP_STEUER_ID_4, "Steuer-ID Block 4", 1),
+            # Steuer-ID: ONE logical 11-digit question. The four 2/3/3/3 comb
+            # widgets are filled by slicing the answer at fill time — see
+            # get_split_fields(). The raw widget names never enter the question
+            # flow or extracted_field_ids.
+            auto(LOGICAL_APP_STEUER_ID, "Steuer-Identifikationsnummer", "text", 1,
+                 src_text="Steuerliche Identifikationsnummer"),
             auto(W_APP_TITEL,       "Titel",                "text", 1,
                  src_text="Titel (akademischer Titel, optional)"),
             auto(W_APP_NAME,        "Name",                 "text", 1,
@@ -267,22 +308,26 @@ class FamilienkasseKg1Template(VerifiedTemplate):
                        "dauernd getrennt lebend", "verwitwet"],
                  src_text="Familienstand"),
             auto(W_FS_SEIT, "seit", "text", 1,
-                 src_text="Familienstand seit (TT.MM.JJJJ)"),
+                 src_text="Familienstand seit (TT.MM.JJJJ)",
+                 condition=_COND_NOT_LEDIG),
 
             # ── Punkt 2 — Partner (Page 1) ───────────────────────────────
-            manual(W_PRT_STEUER_ID_1, "Steuer-ID des Partners Block 1", 1),
-            manual(W_PRT_STEUER_ID_2, "Steuer-ID des Partners Block 2", 1),
-            manual(W_PRT_STEUER_ID_3, "Steuer-ID des Partners Block 3", 1),
-            manual(W_PRT_STEUER_ID_4, "Steuer-ID des Partners Block 4", 1),
-            auto(W_PRT_NAME,        "Name des Partners",       "text", 1),
-            auto(W_PRT_VORNAME,     "Vorname des Partners",    "text", 1),
-            auto(W_PRT_TITEL,       "Titel des Partners",      "text", 1),
-            auto(W_PRT_GEB_DATUM,   "Geburtsdatum des Partners","text", 1),
-            auto(W_PRT_STAATSANG,   "Staatsangehörigkeit des Partners","text", 1),
+            # Shown only when the applicant has a current spouse / registered
+            # partner (verheiratet | Lebenspartnerschaft). Single, divorced,
+            # widowed and permanently-separated applicants skip this section.
+            # Partner Steuer-ID is a logical split field, like the applicant's.
+            auto(LOGICAL_PRT_STEUER_ID, "Steuer-Identifikationsnummer des Partners",
+                 "text", 1, src_text="Steuerliche Identifikationsnummer (Partner)",
+                 condition=_COND_HAS_PARTNER),
+            auto(W_PRT_NAME,        "Name des Partners",       "text", 1, condition=_COND_HAS_PARTNER),
+            auto(W_PRT_VORNAME,     "Vorname des Partners",    "text", 1, condition=_COND_HAS_PARTNER),
+            auto(W_PRT_TITEL,       "Titel des Partners",      "text", 1, condition=_COND_HAS_PARTNER),
+            auto(W_PRT_GEB_DATUM,   "Geburtsdatum des Partners","text", 1, condition=_COND_HAS_PARTNER),
+            auto(W_PRT_STAATSANG,   "Staatsangehörigkeit des Partners","text", 1, condition=_COND_HAS_PARTNER),
             auto(W_PRT_GESCHLECHT,  "Geschlecht des Partners", "select", 1,
-                 opts=["m", "w", "d"]),
-            auto(W_PRT_GEBURTSNAME, "Geburtsname des Partners","text", 1),
-            auto(W_PRT_ANSCHRIFT,   "Anschrift des Partners",  "text", 1),
+                 opts=["m", "w", "d"], condition=_COND_HAS_PARTNER),
+            auto(W_PRT_GEBURTSNAME, "Geburtsname des Partners","text", 1, condition=_COND_HAS_PARTNER),
+            auto(W_PRT_ANSCHRIFT,   "Anschrift des Partners",  "text", 1, condition=_COND_HAS_PARTNER),
 
             # ── Punkt 3 — Bankverbindung (Page 1) ────────────────────────
             auto(W_BANK_IBAN,        "IBAN",       "text", 1),
@@ -293,12 +338,18 @@ class FamilienkasseKg1Template(VerifiedTemplate):
             auto(LOGICAL_BANK_OWNER, "Kontoinhaber", "radio", 1,
                  opts=["Antragsteller", "andere Person"],
                  src_text="Kontoinhaber"),
-            auto(W_BANK_OWNER_NAME,  "Name des Kontoinhabers", "text", 1),
+            auto(W_BANK_OWNER_NAME,  "Name des Kontoinhabers", "text", 1,
+                 condition=_COND_OTHER_ACCOUNT),
 
             # ── Punkt 4 — Abweichende Person (Page 2) ────────────────────
-            auto(W_AP_NAME,      "Name der abweichenden Person",     "text", 2),
-            auto(W_AP_VORNAME,   "Vorname der abweichenden Person",  "text", 2),
-            auto(W_AP_ANSCHRIFT, "Anschrift der abweichenden Person","text", 2),
+            # Shown only when the Kindergeld is paid to someone other than the
+            # applicant (Kontoinhaber == "andere Person").
+            auto(W_AP_NAME,      "Name der abweichenden Person",     "text", 2,
+                 condition=_COND_OTHER_ACCOUNT),
+            auto(W_AP_VORNAME,   "Vorname der abweichenden Person",  "text", 2,
+                 condition=_COND_OTHER_ACCOUNT),
+            auto(W_AP_ANSCHRIFT, "Anschrift der abweichenden Person","text", 2,
+                 condition=_COND_OTHER_ACCOUNT),
 
             # ── Punkt 5 — Tabelle 1 Kinder (5 rows × 4 columns, Page 2) ──
             # Column meanings verified by F3 visual inspection.
@@ -357,6 +408,27 @@ class FamilienkasseKg1Template(VerifiedTemplate):
                     ("Antragsteller", W_BANK_OWNER_APP),
                     ("andere Person", W_BANK_OWNER_OTH),
                 ],
+            ),
+        ]
+
+    def get_split_fields(self) -> list[SplitField]:
+        return [
+            # 11-digit Steuer-ID → 4 comb widgets (2 / 3 / 3 / 3 chars).
+            SplitField(
+                field_id=LOGICAL_APP_STEUER_ID,
+                widget_names=[
+                    W_APP_STEUER_ID_1, W_APP_STEUER_ID_2,
+                    W_APP_STEUER_ID_3, W_APP_STEUER_ID_4,
+                ],
+                slices=_STEUER_ID_SLICES,
+            ),
+            SplitField(
+                field_id=LOGICAL_PRT_STEUER_ID,
+                widget_names=[
+                    W_PRT_STEUER_ID_1, W_PRT_STEUER_ID_2,
+                    W_PRT_STEUER_ID_3, W_PRT_STEUER_ID_4,
+                ],
+                slices=_STEUER_ID_SLICES,
             ),
         ]
 
@@ -528,6 +600,26 @@ _KG1_QUESTIONS: dict = {
     },
 
     # ── Punkt 1 — Antragsteller ───────────────────────────────────────────────
+    LOGICAL_APP_STEUER_ID: {
+        "en": {"question": "What is your tax identification number (Steuer-Identifikationsnummer)?",
+               "help": "It has 11 digits. You find it on letters from the Finanzamt or on the 'Bescheinigung über die Identifikationsnummer'. Enter the digits only.",
+               "example": "12 345 678 901"},
+        "de": {"question": "Wie lautet Ihre steuerliche Identifikationsnummer?",
+               "help": "Sie besteht aus 11 Ziffern. Sie finden sie in Schreiben des Finanzamts oder auf der 'Bescheinigung über die Identifikationsnummer'. Geben Sie nur die Ziffern ein.",
+               "example": "12 345 678 901"},
+        "fr": {"question": "Quel est votre numéro d'identification fiscale (Steuer-Identifikationsnummer) ?",
+               "help": "Il comporte 11 chiffres. Vous le trouverez sur les courriers du Finanzamt. Saisissez uniquement les chiffres.",
+               "example": "12 345 678 901"},
+        "ar": {"question": "ما هو رقم التعريف الضريبي الخاص بك (Steuer-Identifikationsnummer)؟",
+               "help": "يتكون من 11 رقمًا. تجده في الرسائل الواردة من مكتب الضرائب (Finanzamt). أدخل الأرقام فقط.",
+               "example": "12 345 678 901"},
+        "tr": {"question": "Vergi kimlik numaranız (Steuer-Identifikationsnummer) nedir?",
+               "help": "11 hanelidir. Finanzamt'tan gelen mektuplarda bulabilirsiniz. Yalnızca rakamları girin.",
+               "example": "12 345 678 901"},
+        "sq": {"question": "Cili është numri juaj i identifikimit tatimor (Steuer-Identifikationsnummer)?",
+               "help": "Ka 11 shifra. E gjeni në letrat nga Finanzamt. Shkruani vetëm shifrat.",
+               "example": "12 345 678 901"},
+    },
     W_APP_TITEL: {
         "en": {"question": "Your academic title (if any)?", "help": "Optional. Examples: Dr., Prof.", "example": "Dr."},
         "de": {"question": "Ihr akademischer Titel (falls vorhanden)?", "help": "Optional. Beispiele: Dr., Prof.", "example": "Dr."},
@@ -644,6 +736,26 @@ _KG1_QUESTIONS: dict = {
     },
 
     # ── Punkt 2 — Partner ─────────────────────────────────────────────────────
+    LOGICAL_PRT_STEUER_ID: {
+        "en": {"question": "What is your partner's tax identification number (Steuer-Identifikationsnummer)?",
+               "help": "It has 11 digits. Found on letters from the Finanzamt addressed to your partner. Enter the digits only.",
+               "example": "12 345 678 901"},
+        "de": {"question": "Wie lautet die steuerliche Identifikationsnummer Ihres Partners / Ihrer Partnerin?",
+               "help": "Sie besteht aus 11 Ziffern. Zu finden in Schreiben des Finanzamts an Ihren Partner. Nur die Ziffern eingeben.",
+               "example": "12 345 678 901"},
+        "fr": {"question": "Quel est le numéro d'identification fiscale de votre partenaire ?",
+               "help": "Il comporte 11 chiffres. Saisissez uniquement les chiffres.",
+               "example": "12 345 678 901"},
+        "ar": {"question": "ما هو رقم التعريف الضريبي لشريكك (Steuer-Identifikationsnummer)؟",
+               "help": "يتكون من 11 رقمًا. أدخل الأرقام فقط.",
+               "example": "12 345 678 901"},
+        "tr": {"question": "Eşinizin/partnerinizin vergi kimlik numarası nedir?",
+               "help": "11 hanelidir. Yalnızca rakamları girin.",
+               "example": "12 345 678 901"},
+        "sq": {"question": "Cili është numri i identifikimit tatimor i partnerit/partneres suaj?",
+               "help": "Ka 11 shifra. Shkruani vetëm shifrat.",
+               "example": "12 345 678 901"},
+    },
     W_PRT_NAME: {
         "en": {"question": "What is your partner's family name?", "example": "Müller"},
         "de": {"question": "Wie lautet der Familienname Ihres Partners / Ihrer Partnerin?", "example": "Müller"},
