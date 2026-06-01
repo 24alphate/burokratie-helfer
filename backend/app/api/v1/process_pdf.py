@@ -306,6 +306,50 @@ async def process_pdf(
         }.get(extraction.pdf_type, "No fields could be extracted from this PDF.")
         raise HTTPException(status_code=422, detail=detail)
 
+    # ── 1b. Vision enrichment (Level-2 AcroForm only, opt-in) ────────────────
+    # Render the pages and let Gemini label every widget + group sibling
+    # checkboxes. Strictly grounded (model can only reference real widgets) and
+    # fully optional — any failure leaves the heuristic labels in place.
+    vision_groups_for_token: list[dict] = []
+    if extraction.support_level == 2 and settings.vision_backend == "gemini":
+        import asyncio
+        from app.services.vision.gemini_form_vision import enrich_acroform
+        try:
+            enr = await asyncio.to_thread(enrich_acroform, extraction.fields, content)
+        except Exception as e:
+            log.warning("process-pdf VISION_FAILED err=%s", e)
+            enr = None
+        if enr and enr.used:
+            for e in extraction.fields:
+                lbl = enr.labels.get(e.field_id)
+                if lbl:
+                    e.original_label = lbl
+                    e.semantic_key = None  # re-inferred from the new label below
+            if enr.groups:
+                from app.services.pdf_pipeline import FieldMapEntry
+                members = enr.member_widgets
+                extraction.fields = [e for e in extraction.fields if e.field_id not in members]
+                for g in enr.groups:
+                    extraction.fields.append(FieldMapEntry(
+                        field_id=g.field_id,
+                        original_label=g.question,
+                        field_type="radio",
+                        source_page=g.source_page,
+                        options=[opt for (opt, _w, _on) in g.options],
+                        confidence=1.0,
+                        source="acroform",
+                        source_text=g.question,
+                        reason="pdf_field",
+                    ))
+                    vision_groups_for_token.append({
+                        "field_id": g.field_id,
+                        "options": [{"value": opt, "widget": w, "on": on}
+                                    for (opt, w, on) in g.options],
+                    })
+            extracted_ids = [e.field_id for e in extraction.fields]
+            log.info("process-pdf VISION_DONE labels=%d groups=%d field_count=%d",
+                     len(enr.labels), len(enr.groups), len(extraction.fields))
+
     # ── 2. Build raw_extracted_fields (BEFORE translation) ───────────────────
     raw_extracted_fields = [
         RawFieldEntry(
@@ -552,14 +596,11 @@ async def process_pdf(
         if e.original_label and e.original_label.lower() != e.field_id.lower()
         and " " in e.original_label
     )
-    # Weak labels: empty, all-digits, or shorter than 3 chars.
-    import re as _re_d
-    fields_with_weak_label = sum(
-        1 for e in extraction.fields
-        if not e.original_label
-        or len(e.original_label) < 3
-        or _re_d.fullmatch(r"[\d\s\.\-]+", e.original_label or "")
-    )
+    # Weak labels: empty, all-digits/punctuation, too short, or a generic
+    # widget name ('Textfield', …). Shared with the Level-2 label-association
+    # pass so the metric and the fix agree on what counts as weak.
+    from app.services.pdf_pipeline import _is_weak_label
+    fields_with_weak_label = sum(1 for e in extraction.fields if _is_weak_label(e.original_label))
     # Duplicate labels: groups of 2+ fields sharing the same cleaned label.
     label_groups = _Counter(
         (e.original_label or "").strip().lower() for e in extraction.fields
@@ -694,6 +735,7 @@ async def process_pdf(
         secret_key=settings.secret_key,
         template_id=extraction.template_id,   # None for AcroForm/unknown
         support_level=extraction.support_level,  # 1..4 — used by /fill-pdf safety policy
+        vision_groups=vision_groups_for_token or None,  # Level-2 checkbox groups
     )
 
     return ProcessPdfResponse(

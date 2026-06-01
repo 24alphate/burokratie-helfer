@@ -723,6 +723,137 @@ def _extract_full_text(pdf_bytes: bytes) -> str:
         return ""
 
 
+# ── Level-2 positional label association ──────────────────────────────────────
+
+# Generic auto-generated widget names that carry no human meaning. When a
+# field's label matches one of these (optionally followed by an index), we try
+# to recover a real label from the page text next to the widget.
+_WEAK_LABEL_RE = re.compile(
+    r"^(text\s*field|textfeld|text|field|feld|checkbox|check\s*box|"
+    r"kontrollk[aä]stchen|optionfield|option|undefined|untitled|comb)"
+    r"[\s\-_.]*\d*$",
+    re.IGNORECASE,
+)
+
+# Distance caps (PDF points) for matching a label to a widget.
+_LABEL_ABOVE_MAX_GAP = 38.0   # label sits just above the box
+_LABEL_LEFT_MAX_GAP  = 240.0  # label sits to the left, same row
+_LABEL_MIN_OVERLAP   = 3.0    # required x- (above) or y- (left) overlap
+
+
+def _is_weak_label(label: str) -> bool:
+    """
+    True when a label carries no human meaning — empty, too short, pure
+    digits/punctuation, or a generic widget name like 'Textfield' / 'Checkbox-3'.
+    Such labels are candidates for positional recovery from the page text.
+    """
+    lo = (label or "").strip()
+    if len(lo) < 3:
+        return True
+    if re.fullmatch(r"[\d\s.\-_/]+", lo):
+        return True
+    if _WEAK_LABEL_RE.match(lo):
+        return True
+    return False
+
+
+def _associate_labels_by_position(fields: list[FieldMapEntry], pdf_bytes: bytes) -> None:
+    """
+    Level-2 enrichment: for AcroForm fields whose label is weak (a generic
+    widget name like 'Textfield'), recover a human label from the nearest page
+    text. On German forms the visible label sits just ABOVE the box (common) or
+    to its LEFT.
+
+    Coordinates: widget bboxes are PDF points, bottom-left origin (y up);
+    pdfplumber words are top-left origin (y down). We convert each widget to
+    top-left via the page height before matching.
+
+    Safe + additive: only `original_label` is changed (never field_id, type,
+    bbox, confidence). Fields without a bbox or without a good match are left
+    untouched, so this can never make labels worse than today.
+    """
+    weak = [f for f in fields if f.bbox and _is_weak_label(f.original_label)]
+    if not weak:
+        return
+    try:
+        import pdfplumber
+    except Exception:
+        return
+
+    by_page: dict[int, list[FieldMapEntry]] = {}
+    for f in weak:
+        by_page.setdefault(f.source_page, []).append(f)
+
+    def _hgap_ok(a0, a1, b0, b1):
+        return min(a1, b1) - max(a0, b0) > _LABEL_MIN_OVERLAP
+
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            for page_num, page_fields in by_page.items():
+                idx = page_num - 1
+                if idx < 0 or idx >= len(pdf.pages):
+                    continue
+                page = pdf.pages[idx]
+                H = float(page.height)
+                try:
+                    words = page.extract_words(use_text_flow=False, keep_blank_chars=False) or []
+                except Exception:
+                    words = []
+                # Keep only label-like words (drops instructions, page numbers, …).
+                cand = [
+                    w for w in words
+                    if (w.get("text") or "").strip() and not _skip((w.get("text") or "").strip())
+                ]
+                if not cand:
+                    continue
+
+                for f in page_fields:
+                    x0, y0, x1, y1 = f.bbox
+                    w_x0, w_x1 = min(x0, x1), max(x0, x1)
+                    w_top = H - max(y0, y1)   # flip bottom-left → top-left
+                    w_bot = H - min(y0, y1)
+
+                    # 1) Label ABOVE: words whose bottom is just above the box top
+                    #    and which overlap the box horizontally. Take the nearest
+                    #    line, then join its overlapping words left-to-right.
+                    above = [
+                        w for w in cand
+                        if float(w["bottom"]) <= w_top + 2
+                        and (w_top - float(w["bottom"])) <= _LABEL_ABOVE_MAX_GAP
+                        and _hgap_ok(w_x0, w_x1, float(w["x0"]), float(w["x1"]))
+                    ]
+                    label = ""
+                    if above:
+                        nearest_bottom = max(float(w["bottom"]) for w in above)
+                        line = sorted(
+                            (w for w in above if abs(float(w["bottom"]) - nearest_bottom) <= 2.5),
+                            key=lambda w: float(w["x0"]),
+                        )
+                        label = " ".join((w.get("text") or "").strip() for w in line).strip()
+
+                    # 2) else Label LEFT: nearest word on the same row to the left.
+                    if not label:
+                        left = [
+                            w for w in cand
+                            if float(w["x1"]) <= w_x0 + 2
+                            and (w_x0 - float(w["x1"])) <= _LABEL_LEFT_MAX_GAP
+                            and _hgap_ok(w_top, w_bot, float(w["top"]), float(w["bottom"]))
+                        ]
+                        if left:
+                            anchor = max(left, key=lambda w: float(w["x1"]))
+                            row = sorted(
+                                (w for w in left if abs(float(w["top"]) - float(anchor["top"])) <= 2.5),
+                                key=lambda w: float(w["x0"]),
+                            )
+                            label = " ".join((w.get("text") or "").strip() for w in row).strip()
+
+                    label = label.rstrip(":：").strip()
+                    if label and len(label) >= 2:
+                        f.original_label = label[:90]
+    except Exception:
+        return
+
+
 # ── Main entry point ───────────────────────────────────────────────────────────
 
 def route_document(pdf_bytes: bytes) -> DocumentRoute:
@@ -801,6 +932,9 @@ def extract_field_map(pdf_bytes: bytes) -> ExtractionResult:
     # Level 2: AcroForm — may degrade to pdfplumber if widgets are empty
     if route.support_level == 2:
         fields = extract_acroform_fields(pdf_bytes)
+        # Recover human labels for generically-named widgets ('Textfield', …)
+        # from nearby page text BEFORE semantic-key inference runs.
+        _associate_labels_by_position(fields, pdf_bytes)
         # Phase D/D3 — inferring semantic_key from the cleaned label lets the
         # priority-2 layer fire for AcroForm fields. Skipped for Level 1
         # (templates set semantic_key explicitly) and Level 3+ (handled below).

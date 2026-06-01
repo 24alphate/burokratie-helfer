@@ -43,6 +43,7 @@ def sign_pdf_token(
     secret_key: str,
     template_id: str | None = None,
     support_level: int | None = None,
+    vision_groups: list[dict] | None = None,
 ) -> str:
     """
     Sign a PDF token.  Returns a URL-safe signed string.
@@ -64,6 +65,9 @@ def sign_pdf_token(
         "filename":      filename,
         "template_id":   template_id,    # None for AcroForm/unknown PDFs
         "support_level": support_level,  # 1=verified | 2=acroform | 3=flat | 4=scanned
+        # Phase Vision — Level-2 checkbox groups: [{field_id, options:[{value,widget,on}]}].
+        # Expanded to per-widget on/off writes at fill time. None for most PDFs.
+        "vision_groups": vision_groups,
     }
     return _serializer(secret_key).dumps(payload)
 
@@ -91,4 +95,5 @@ def verify_pdf_token(token: str, secret_key: str) -> dict:
         "filename":      payload.get("filename", "form.pdf"),
         "template_id":   payload.get("template_id"),    # None for old tokens / AcroForm
         "support_level": payload.get("support_level"),  # None for tokens signed pre-E1
+        "vision_groups": payload.get("vision_groups"),  # None unless Level-2 vision groups
     }
