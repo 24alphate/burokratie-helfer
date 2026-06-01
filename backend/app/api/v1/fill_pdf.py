@@ -168,6 +168,10 @@ async def fill_pdf(body: FillPdfRequest):
     # Phase E/E1 — May be None for tokens signed before E1; treated as
     # "unknown level" → summary fallback allowed, same as Level 3.
     support_level: int | None = token_data.get("support_level")
+    # Phase Vision — Level-2 checkbox groups recovered by the vision engine:
+    # [{field_id, options:[{value, widget, on}]}]. Expanded to per-widget
+    # on/off writes below. Empty for everything else.
+    vision_groups: list = token_data.get("vision_groups") or []
 
     log.info(
         "fill-pdf START filename=%s template_id=%s support_level=%s field_count=%d answer_count=%d",
@@ -447,6 +451,55 @@ async def fill_pdf(body: FillPdfRequest):
                     "another PDF or fill this one manually."
                 ),
             )
+
+    # ── 3a-iv. Level-2 vision checkbox groups → fitz fill ────────────────────
+    # When the vision engine grouped sibling checkboxes into radio questions,
+    # expand the chosen option into per-widget writes and fill via fitz, which
+    # honors each widget's real on-state (PyPDFGenerator normalizes to "Yes"/
+    # "Off" and would mis-check custom-export checkboxes). Member widgets are
+    # real PDF widgets, so fill stays grounded.
+    if vision_groups:
+        fill_answers = dict(body.answers)
+        for grp in vision_groups:
+            gid = grp.get("field_id")
+            if gid not in fill_answers:
+                continue
+            chosen = fill_answers.pop(gid)
+            for o in (grp.get("options") or []):
+                w = o.get("widget")
+                if not w:
+                    continue
+                fill_answers[w] = (o.get("on") or "Yes") if o.get("value") == chosen else "Off"
+
+        from app.services.pdf_generator.fitz_acroform_fill import fill_acroform_via_fitz
+        try:
+            result = fill_acroform_via_fitz(pdf_bytes, fill_answers)
+        except Exception as e:
+            log.critical("fill-pdf VISION_GROUP_FILL_CRASHED err=%s", e)
+            raise HTTPException(
+                status_code=500,
+                detail=("We could not safely fill this PDF. Please try another "
+                        "PDF or fill this one manually."),
+            )
+        if result.field_count_filled == 0 and len(body.answers) > 0:
+            log.critical("fill-pdf VISION_GROUP_ZERO_FILL answers=%d", len(body.answers))
+            raise HTTPException(
+                status_code=500,
+                detail=("We could not safely fill this PDF. Please try another "
+                        "PDF or fill this one manually."),
+            )
+        log.info("fill-pdf VISION_GROUP_DONE filled=%d", result.field_count_filled)
+        return Response(
+            content=result.pdf_bytes,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="{safe_name}"',
+                "X-Fill-Strategy": "acroform",
+                "X-Fields-Filled": str(result.field_count_filled),
+                "Access-Control-Expose-Headers":
+                    "X-Fill-Strategy,X-Fields-Filled,X-Not-Fillable-Fields",
+            },
+        )
 
     # ── 3b. AcroForm / unknown flat → legacy PyPDFGenerator path ─────────────
     import os

@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     database_url: str = _DEFAULT_DB
     ocr_backend: str = "mock"
     translation_backend: str = "mock"
+    # Vision-LLM AcroForm enrichment (Level 2). "off" = use the positional
+    # heuristic only; "gemini" = render pages and ask Gemini 2.0 Flash to label
+    # widgets + group checkboxes (needs GEMINI_API_KEY). Falls back to the
+    # heuristic on any error, so this is always a safe quality upgrade.
+    vision_backend: str = "off"
     upload_dir: str = _DEFAULT_UPLOAD
     generated_dir: str = _DEFAULT_GENERATED
     static_pdfs_dir: str = str(BASE_DIR / "static_pdfs")
