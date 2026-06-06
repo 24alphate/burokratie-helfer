@@ -9,6 +9,7 @@ import { SelectInput } from "./SelectInput";
 import { YesNoInput } from "./YesNoInput";
 import { RadioInput } from "./RadioInput";
 import { GuidancePanel } from "./GuidancePanel";
+import { pickInputKind } from "@/lib/inputKind";
 
 interface QuestionCardProps {
   question: QuestionRead;
@@ -54,9 +55,14 @@ export function QuestionCard({
     ? Math.round((question.answered_count / question.total_count) * 100)
     : 0;
 
-  // Determine how to render the input
+  // Determine how to render the input. Exactly one branch fires (inputKind),
+  // so a field is never left without an input — including choice fields whose
+  // options we couldn't extract (they fall back to free text instead of
+  // rendering nothing, which was the old behavior for option-less radio/select).
   const hasOptions = options.length > 0;
   const itype = question.input_type;
+  const hasLegacyOptions = (question.options?.length ?? 0) > 0;
+  const inputKind = pickInputKind(itype, hasOptions, hasLegacyOptions);
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
@@ -95,45 +101,19 @@ export function QuestionCard({
         </div>
       )}
 
-      {/* Radio / single-select (most common for checkbox groups in forms) */}
-      {hasOptions && (itype === "radio" || itype === "select" || itype === "checkbox" || itype === "yes_no") && (
+      {/* Choice field with extracted options (radio / select / checkbox group) */}
+      {inputKind === "radio" && (
         <RadioInput
           options={options}
           onSubmit={onSubmit}
           isLoading={isLoading}
           submitLabel={submitLabel}
-          multi={false}
+          multi={itype === "multiselect"}
         />
       )}
 
-      {/* Multi-select checkboxes */}
-      {hasOptions && itype === "multiselect" && (
-        <RadioInput
-          options={options}
-          onSubmit={onSubmit}
-          isLoading={isLoading}
-          submitLabel={submitLabel}
-          multi={true}
-        />
-      )}
-
-      {/* Yes/No and single checkbox (no PDF options = checked or not) */}
-      {!hasOptions && (itype === "yes_no" || itype === "checkbox") && (
-        <YesNoInput locale={locale} onSubmit={onSubmit} isLoading={isLoading} />
-      )}
-
-      {/* Text / number / address / signature */}
-      {(!hasOptions && (itype === "text" || itype === "number" || itype === "signature" || itype === "multiselect")) && (
-        <TextInput onSubmit={onSubmit} isLoading={isLoading} submitLabel={submitLabel} />
-      )}
-
-      {/* Date */}
-      {itype === "date" && (
-        <DateInput onSubmit={onSubmit} isLoading={isLoading} submitLabel={submitLabel} />
-      )}
-
-      {/* Select with OptionRead format (legacy ALG II template) */}
-      {!hasOptions && itype === "select" && question.options && (
+      {/* Legacy ALG II select carrying OptionRead[] */}
+      {inputKind === "select-legacy" && question.options && (
         <SelectInput
           options={question.options}
           locale={locale}
@@ -141,6 +121,22 @@ export function QuestionCard({
           isLoading={isLoading}
           submitLabel={submitLabel}
         />
+      )}
+
+      {/* Yes/No and single checkbox (no PDF options = checked or not) */}
+      {inputKind === "yesno" && (
+        <YesNoInput locale={locale} onSubmit={onSubmit} isLoading={isLoading} />
+      )}
+
+      {/* Date */}
+      {inputKind === "date" && (
+        <DateInput onSubmit={onSubmit} isLoading={isLoading} submitLabel={submitLabel} />
+      )}
+
+      {/* Text / number / signature — and option-less radio/select/multiselect,
+          which fall back to free text so the field stays answerable. */}
+      {inputKind === "text" && (
+        <TextInput onSubmit={onSubmit} isLoading={isLoading} submitLabel={submitLabel} />
       )}
     </div>
   );

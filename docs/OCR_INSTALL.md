@@ -1,5 +1,14 @@
 # OCR engine install (Tesseract)
 
+> **Note (Stage 4C — Claude Vision is now the primary scan path).**
+> When `ANTHROPIC_API_KEY` is set, a scanned/photographed Level-4 PDF is read
+> directly by Claude Vision (`app/services/ocr/claude_scan.py`): the pages are
+> rendered and Claude returns the blank form's field structure, which promotes
+> the document to Level 3. **No OS binary is required for this path** — it's the
+> recommended way to enable scanning locally. Tesseract (below) remains the
+> offline fallback used when no Anthropic key is configured; without either,
+> scans surface `ocr_unavailable` and the user is asked to upload a digital PDF.
+
 Stage 4A added Python deps `pytesseract` + `Pillow`, but those are just
 wrappers. The actual OCR engine `tesseract-ocr` runs as an OS binary. If
 it's not installed, OCR is reported as `ocr_unavailable` to the user

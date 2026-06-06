@@ -165,6 +165,15 @@ class FieldMapEntry:
     source_page: int            # 1-indexed
     bbox: Optional[list[float]] = None       # [x0, y0, x1, y1] in PDF points
     options: list[str] = field(default_factory=list)  # PDF-native option values
+    # Human-readable label per option VALUE (document language), recovered from
+    # the page text beside each choice box (Feature E). Maps option value →
+    # German label, e.g. {"0": "Einzelfahrt", "1": "Tageskarte"}. The AI
+    # translates these so the user sees real choices instead of "0"/"1".
+    option_labels: dict = field(default_factory=dict)
+    # Section header this field sits under in the PDF (document language),
+    # e.g. "Datum des Schulausflugstages" (Feature D). Gives the AI translator
+    # the context a bare field name ("Tag") lacks. Never affects field_id/filling.
+    section_title: Optional[str] = None
     current_value: str = ""     # pre-filled value if any
     confidence: float = 1.0     # 1.0=AcroForm, 0.75=pdfplumber layout, 0.5=ocr
     source: str = "acroform"    # "acroform" | "pdfplumber" | "ocr"
@@ -336,6 +345,174 @@ def _radio_options_from_kids(field_obj) -> list[str]:
     return options
 
 
+def _radio_option_widgets(field_obj) -> list[tuple[str, list[float]]]:
+    """
+    Per-kid (export_value, rect) for a radio group — used to find the human
+    label printed beside each option box (Feature E). rect is the kid widget's
+    /Rect in PDF points (bottom-left origin), same convention as FieldMapEntry.bbox.
+    """
+    out: list[tuple[str, list[float]]] = []
+    kids = field_obj.get("/Kids", [])
+    if hasattr(kids, "get_object"):
+        kids = kids.get_object()
+    for kid_ref in list(kids)[:50]:
+        try:
+            kid = kid_ref.get_object() if hasattr(kid_ref, "get_object") else kid_ref
+            value = ""
+            ap = kid.get("/AP")
+            if ap is not None:
+                if hasattr(ap, "get_object"):
+                    ap = ap.get_object()
+                normal = ap.get("/N")
+                if normal is not None:
+                    if hasattr(normal, "get_object"):
+                        normal = normal.get_object()
+                    for key in (normal.keys() if hasattr(normal, "keys") else []):
+                        v = str(key).lstrip("/")
+                        if v and v.lower() not in ("off", ""):
+                            value = v
+                            break
+            rect = kid.get("/Rect")
+            bbox: Optional[list[float]] = None
+            if rect:
+                try:
+                    bbox = [float(x) for x in list(rect)[:4]]
+                except Exception:
+                    bbox = None
+            if value and bbox:
+                out.append((value, bbox))
+        except Exception:
+            continue
+    return out
+
+
+def _collect_radio_option_widgets(
+    pdf_bytes: bytes, names: set[str]
+) -> dict[str, list[tuple[str, list[float]]]]:
+    """Walk the AcroForm tree → {field_id: [(value, rect), ...]} for named radio fields."""
+    result: dict[str, list[tuple[str, list[float]]]] = {}
+    try:
+        import pypdf
+        reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+        root = reader.trailer.get("/Root")
+        if root is None:
+            return result
+        if hasattr(root, "get_object"):
+            root = root.get_object()
+        acroform = root.get("/AcroForm")
+        if acroform is None:
+            return result
+        if hasattr(acroform, "get_object"):
+            acroform = acroform.get_object()
+        fields_arr = acroform.get("/Fields", [])
+        if hasattr(fields_arr, "get_object"):
+            fields_arr = fields_arr.get_object()
+
+        def walk(arr, depth=0):
+            for ref in list(arr):
+                try:
+                    f = ref.get_object() if hasattr(ref, "get_object") else ref
+                    name = f.get("/T", "")
+                    if hasattr(name, "get_object"):
+                        name = name.get_object()
+                    clean = str(name).lstrip("/").strip()
+                    has_kids = "/Kids" in f
+                    if clean in names and has_kids:
+                        ow = _radio_option_widgets(f)
+                        if ow:
+                            result[clean] = ow
+                        continue  # kids are option widgets, not nested fields
+                    if has_kids and depth < 5:
+                        kids = f.get("/Kids", [])
+                        if hasattr(kids, "get_object"):
+                            kids = kids.get_object()
+                        walk(kids, depth + 1)
+                except Exception:
+                    continue
+
+        walk(fields_arr)
+    except Exception:
+        return result
+    return result
+
+
+# Option-label positional caps (PDF points): the human label sits to the RIGHT
+# of the choice box on the same row — the common German-form convention.
+_OPTION_LABEL_RIGHT_MAX_GAP = 280.0
+_OPTION_LABEL_ROW_TOL = 4.0
+_OPTION_LABEL_MAX_CHARS = 80
+
+
+def _associate_option_labels(fields: list[FieldMapEntry], pdf_bytes: bytes) -> None:
+    """
+    Feature E (positional): for radio groups whose options are non-descriptive
+    export values ("0"/"1"), recover the German label printed beside each box
+    and store it in entry.option_labels {value: label}. Safe + additive: only
+    fills option_labels; never changes field_id, type, or option values. Misses
+    are left for the Claude-vision fallback (recover_option_labels_via_vision).
+    """
+    radio_ids = {f.field_id for f in fields if f.field_type == "radio"}
+    if not radio_ids:
+        return
+    widgets_by_field = _collect_radio_option_widgets(pdf_bytes, radio_ids)
+    if not widgets_by_field:
+        return
+    try:
+        import pdfplumber
+    except Exception:
+        return
+
+    by_field = {f.field_id: f for f in fields}
+    by_page: dict[int, list[str]] = {}
+    for fid in widgets_by_field:
+        f = by_field.get(fid)
+        if f:
+            by_page.setdefault(f.source_page, []).append(fid)
+
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            for page_num, fids in by_page.items():
+                idx = page_num - 1
+                if idx < 0 or idx >= len(pdf.pages):
+                    continue
+                page = pdf.pages[idx]
+                H = float(page.height)
+                try:
+                    words = page.extract_words(use_text_flow=False, keep_blank_chars=False) or []
+                except Exception:
+                    words = []
+                cand = [w for w in words if (w.get("text") or "").strip()]
+                if not cand:
+                    continue
+                for fid in fids:
+                    entry = by_field[fid]
+                    labels: dict[str, str] = {}
+                    for value, rect in widgets_by_field[fid]:
+                        x0, y0, x1, y1 = rect
+                        box_right = max(x0, x1)
+                        top = H - max(y0, y1)
+                        bot = H - min(y0, y1)
+                        cy = (top + bot) / 2.0
+                        row = [
+                            w for w in cand
+                            if float(w["x0"]) >= box_right - 2
+                            and (float(w["x0"]) - box_right) <= _OPTION_LABEL_RIGHT_MAX_GAP
+                            and float(w["top"]) - _OPTION_LABEL_ROW_TOL <= cy
+                            and cy <= float(w["bottom"]) + _OPTION_LABEL_ROW_TOL
+                        ]
+                        if not row:
+                            continue
+                        row.sort(key=lambda w: float(w["x0"]))
+                        text = " ".join((w.get("text") or "").strip() for w in row).strip()
+                        text = text[:_OPTION_LABEL_MAX_CHARS].strip()
+                        if text and len(text) >= 2:
+                            labels[value] = text
+                    if labels:
+                        entry.option_labels.update(labels)
+    except Exception:
+        return
+
+
 def _collect_widget_positions(reader) -> dict[str, tuple[int, Optional[list[float]]]]:
     """
     One-pass page walk: collect widget name → (page_num, bbox).
@@ -383,10 +560,17 @@ def _walk_field_tree(
     seen: set[str],
     widget_positions: dict,
     depth: int = 0,
+    inherited_ft=None,
+    inherited_ff=None,
 ) -> list[FieldMapEntry]:
     """
     Recursive AcroForm field-tree traversal.
     Handles intermediate group nodes (no /FT, has /Kids).
+
+    /FT and /Ff are *inheritable* attributes per the PDF spec: a terminal field
+    may omit them and take the parent node's value. We thread the inherited
+    values down the recursion so radio / checkbox / choice fields that rely on
+    inheritance get their real type instead of silently defaulting to "text".
     """
     results: list[FieldMapEntry] = []
     for field_ref in list(fields_array):
@@ -394,14 +578,25 @@ def _walk_field_tree(
             break
         try:
             f = field_ref.get_object() if hasattr(field_ref, "get_object") else field_ref
-            ft_raw = f.get("/FT")
+            own_ft = f.get("/FT")
+            ft_raw = own_ft if own_ft is not None else inherited_ft  # /FT inheritable
             has_kids = "/Kids" in f
 
+            # /Ff (field flags: radio / pushbutton / multiselect bits) is
+            # inheritable too — own flags else the parent's.
+            own_ff = f.get("/Ff")
+            ff_source = own_ff if own_ff is not None else inherited_ff
+
+            # Non-terminal grouping node: no resolvable /FT but has kids →
+            # recurse, propagating the inheritable /FT and /Ff to descendants.
             if ft_raw is None and has_kids and depth < 5:
                 kids = f.get("/Kids", [])
                 if hasattr(kids, "get_object"):
                     kids = kids.get_object()
-                results.extend(_walk_field_tree(kids, seen, widget_positions, depth + 1))
+                results.extend(_walk_field_tree(
+                    kids, seen, widget_positions, depth + 1,
+                    inherited_ft=ft_raw, inherited_ff=ff_source,
+                ))
                 continue
 
             name = f.get("/T", "")
@@ -414,7 +609,7 @@ def _walk_field_tree(
 
             ft_str = str(ft_raw) if ft_raw else "/Tx"
             try:
-                flags = int(str(f.get("/Ff", "0")).split(".")[0] or "0")
+                flags = int(str(ff_source).split(".")[0]) if ff_source is not None else 0
             except (ValueError, TypeError):
                 flags = 0
             ftype = _classify_field_type(ft_str, flags) or "text"
@@ -436,8 +631,19 @@ def _walk_field_tree(
                         options.append(str(o[0]) if isinstance(o, (list, tuple)) else str(o))
                 except Exception:
                     pass
-            elif ftype == "radio" and has_kids:
-                options = _radio_options_from_kids(f)
+            elif ftype == "radio":
+                options = _radio_options_from_kids(f) if has_kids else []
+                if not options:
+                    # Some radio groups expose export values via /Opt on the
+                    # parent instead of per-kid /AP/N — use it as a fallback.
+                    try:
+                        raw_opts = f.get("/Opt", [])
+                        for o in (raw_opts if isinstance(raw_opts, list) else []):
+                            v = str(o[0]) if isinstance(o, (list, tuple)) else str(o)
+                            if v and v not in options:
+                                options.append(v)
+                    except Exception:
+                        pass
 
             page_num, bbox = widget_positions.get(clean, (1, None))
 
@@ -452,7 +658,13 @@ def _walk_field_tree(
             # Fall back to a cleaned version of the technical field name.
             # This strips prefixes (txtf/date/chk …) and splits camelCase
             # so the AI translator has meaningful context instead of noise.
-            if not human_label or human_label == clean:
+            #
+            # Also reject a WEAK /TU: some forms bake a junk tooltip (e.g. a
+            # 2-char "we" placeholder) into /TU. Trusting it would surface "we"
+            # as the question label, so when /TU is weak we prefer the cleaned
+            # field name (e.g. "Startort_11" → "Startort"). _associate_labels_by_
+            # position may still recover a better label from the page afterwards.
+            if not human_label or human_label == clean or _is_weak_label(human_label):
                 human_label = _clean_acroform_field_name(clean)
 
             results.append(FieldMapEntry(
@@ -854,6 +1066,184 @@ def _associate_labels_by_position(fields: list[FieldMapEntry], pdf_bytes: bytes)
         return
 
 
+# ── Section-header association (Feature D) ────────────────────────────────────
+# A field name like "Tag" or "Ort" is meaningless out of context. The real
+# meaning lives in the numbered/bold section header above it ("Datum des
+# Schulausflugstages", "Name und Anschrift der Schule"). We detect those
+# headers and attach the nearest one above each field, giving the AI translator
+# the context it needs to write a correct question instead of guessing "your".
+
+_SECTION_NUM_RE = re.compile(r"^\s*\d{1,2}[\s.):]+(.+)$")
+_SECTION_MAX_GAP = 230.0    # a field may sit at most this far below its header (pts)
+_SECTION_MAX_LEN = 70
+
+
+def _median(nums: list[float]) -> float:
+    vals = sorted(v for v in nums if v)
+    if not vals:
+        return 0.0
+    n = len(vals)
+    mid = n // 2
+    return vals[mid] if n % 2 else (vals[mid - 1] + vals[mid]) / 2.0
+
+
+_COLUMN_SPLIT_GAP = 40.0   # horizontal gap (pts) that separates two columns
+
+
+def _group_words_into_lines(words: list[dict]) -> list[dict]:
+    """
+    Bucket pdfplumber words into visual lines with geometry + font info.
+
+    A row is further split into column SEGMENTS wherever two consecutive words
+    are separated by more than _COLUMN_SPLIT_GAP, so side-by-side section headers
+    ("2 Klasse    3 Datum …") become two distinct lines instead of one merged blob.
+    """
+    rows: dict[int, list[dict]] = {}
+    for w in words:
+        key = round(float(w.get("top", 0.0)) / 3.0)   # ~3pt buckets
+        rows.setdefault(key, []).append(w)
+    lines: list[dict] = []
+    for ws in rows.values():
+        ws.sort(key=lambda w: float(w.get("x0", 0.0)))
+        segments: list[list[dict]] = []
+        seg: list[dict] = []
+        prev_x1: Optional[float] = None
+        for w in ws:
+            if prev_x1 is not None and float(w.get("x0", 0.0)) - prev_x1 > _COLUMN_SPLIT_GAP:
+                segments.append(seg)
+                seg = []
+            seg.append(w)
+            prev_x1 = float(w.get("x1", 0.0))
+        if seg:
+            segments.append(seg)
+        for s in segments:
+            text = " ".join((w.get("text") or "").strip() for w in s).strip()
+            if not text:
+                continue
+            size = max((float(w.get("size", 0.0)) for w in s), default=0.0)
+            fontname = next((str(w.get("fontname")) for w in s if w.get("fontname")), "")
+            top = min((float(w.get("top", 0.0)) for w in s), default=0.0)
+            x0 = min((float(w.get("x0", 0.0)) for w in s), default=0.0)
+            x1 = max((float(w.get("x1", 0.0)) for w in s), default=0.0)
+            lines.append({"top": top, "x0": x0, "x1": x1, "text": text,
+                          "size": size, "fontname": fontname})
+    lines.sort(key=lambda ln: ln["top"])
+    return lines
+
+
+def _clean_section_title(text: str) -> str:
+    t = text.strip()
+    m = _SECTION_NUM_RE.match(t)
+    if m:
+        t = m.group(1).strip()
+    return t[:_SECTION_MAX_LEN].strip()
+
+
+def _associate_section_titles(fields: list[FieldMapEntry], pdf_bytes: bytes) -> None:
+    """
+    Attach the section header each field sits under to entry.section_title.
+
+    Header heuristic (any of): a numbered line ("3 Datum …"), a bold line, or a
+    line set noticeably larger than the page's body text. Each field is matched
+    to the nearest qualifying header above it within _SECTION_MAX_GAP points.
+
+    Safe + additive: only sets section_title; never touches field_id, type, or
+    options. Fields with no header above keep section_title=None (no change in
+    behavior). pdfplumber coords are top-left; widget bboxes are bottom-left, so
+    we flip via page height before comparing.
+    """
+    targets = [f for f in fields if f.bbox]
+    if not targets:
+        return
+    try:
+        import pdfplumber
+    except Exception:
+        return
+
+    by_page: dict[int, list[FieldMapEntry]] = {}
+    for f in targets:
+        by_page.setdefault(f.source_page, []).append(f)
+
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            for page_num, page_fields in by_page.items():
+                idx = page_num - 1
+                if idx < 0 or idx >= len(pdf.pages):
+                    continue
+                page = pdf.pages[idx]
+                H = float(page.height)
+                try:
+                    words = page.extract_words(
+                        use_text_flow=False, keep_blank_chars=False,
+                        extra_attrs=["size", "fontname"],
+                    ) or []
+                except Exception:
+                    words = []
+                lines = _group_words_into_lines(words)
+                if not lines:
+                    continue
+                body_size = _median([ln["size"] for ln in lines])
+
+                def _looks_like_sentence(t: str) -> bool:
+                    # Section headers are terse labels, not prose. Instruction
+                    # paragraphs (often bold on German forms) end with sentence
+                    # punctuation or run long — exclude them.
+                    return t.endswith((",", ".", ";", ":")) or len(t.split()) > 9
+
+                # Strip a trailing parenthetical ("(inkl. …)", "(Bei …)") so a
+                # header like "4 Anzahl … (inkl. Lehrkraft …)" isn't rejected by
+                # the length cap and resolves to its core title.
+                def _core(t: str) -> str:
+                    return re.sub(r"\s*\(.*$", "", t).strip()
+
+                numbered: list[tuple] = []
+                soft: list[tuple] = []
+                for ln in lines:
+                    txt = _core(ln["text"].strip())
+                    if not txt or len(txt) > _SECTION_MAX_LEN or _looks_like_sentence(txt):
+                        continue
+                    title = _clean_section_title(txt)
+                    # Require a real word — drops junk like "= 6" or lone numbers.
+                    if len(title) < 3 or not re.search(r"[A-Za-zÄÖÜäöüß]{3,}", title):
+                        continue
+                    geom = (ln["top"], float(ln["x0"]), float(ln["x1"]), title)
+                    if _SECTION_NUM_RE.match(txt):
+                        numbered.append(geom)
+                        continue
+                    is_bold = "bold" in (ln["fontname"] or "").lower()
+                    is_large = body_size > 0 and ln["size"] >= body_size * 1.12
+                    if is_bold or is_large:
+                        soft.append(geom)
+
+                # Numbered headers ("3 Datum …") are an unambiguous structural
+                # signal. When a page has them, trust ONLY those and ignore the
+                # bold/large fallback (bold instruction paragraphs would mislead).
+                headers = numbered or soft
+                if not headers:
+                    continue
+
+                for f in page_fields:
+                    x0, y0, x1, y1 = f.bbox
+                    f_top = H - max(y0, y1)        # field top, flipped to top-left
+                    fx0, fx1 = min(x0, x1), max(x0, x1)
+                    above = [
+                        (f_top - htop, hx0, hx1, ht)
+                        for (htop, hx0, hx1, ht) in headers
+                        if 0 <= f_top - htop <= _SECTION_MAX_GAP
+                    ]
+                    if not above:
+                        continue
+                    # Column-aware: prefer headers whose x-range overlaps the
+                    # field's (handles side-by-side sections like "2 Klasse |
+                    # 3 Datum"); else fall back to all candidates. Then nearest.
+                    overlap = [c for c in above if min(c[2], fx1) - max(c[1], fx0) > -2.0]
+                    best = min(overlap or above, key=lambda c: c[0])[3]
+                    if best and best.lower() != (f.original_label or "").strip().lower():
+                        f.section_title = best
+    except Exception:
+        return
+
+
 # ── Main entry point ───────────────────────────────────────────────────────────
 
 def route_document(pdf_bytes: bytes) -> DocumentRoute:
@@ -935,6 +1325,12 @@ def extract_field_map(pdf_bytes: bytes) -> ExtractionResult:
         # Recover human labels for generically-named widgets ('Textfield', …)
         # from nearby page text BEFORE semantic-key inference runs.
         _associate_labels_by_position(fields, pdf_bytes)
+        # Feature E — recover real choice labels (e.g. "Einzelfahrt"/"Tageskarte")
+        # for radio groups whose options are bare export values ("0"/"1").
+        _associate_option_labels(fields, pdf_bytes)
+        # Feature D — attach each field's section header ("Datum des
+        # Schulausflugstages", …) so the AI translator has real context.
+        _associate_section_titles(fields, pdf_bytes)
         # Phase D/D3 — inferring semantic_key from the cleaned label lets the
         # priority-2 layer fire for AcroForm fields. Skipped for Level 1
         # (templates set semantic_key explicitly) and Level 3+ (handled below).
@@ -1054,8 +1450,12 @@ def field_map_to_defs(
     for i, entry in enumerate(field_map, 1):
         tr = validated_translations.get(entry.field_id, {})
         tr_opts = tr.get("translated_options", {})
+        # Option label priority: AI/verified translation → recovered German
+        # label (Feature E) → the raw export value as a last resort. This is why
+        # a radio whose PDF options are "0"/"1" can still show "Einzelfahrt"/
+        # "Tageskarte" instead of meaningless codes.
         options = [
-            FieldOption(value=v, label=tr_opts.get(v, v))
+            FieldOption(value=v, label=(tr_opts.get(v) or entry.option_labels.get(v) or v))
             for v in entry.options
         ]
 

@@ -4,8 +4,8 @@ Translates PDF field labels and their options into the user's preferred language
 Called once per upload — generates question text + option labels for every
 field in the PDF, in whatever language the user selected.
 
-Fallback chain when Groq is unavailable or returns wrong language:
-  1. Groq AI translation in selected language
+Fallback chain when Anthropic is unavailable or returns wrong language:
+  1. Anthropic (Claude) AI translation in selected language
   2. Deterministic lookup table for known German labels
   3. Number-prefix-stripped label → deterministic lookup
   4. First-word lookup (for compound labels)
@@ -694,19 +694,28 @@ def _normalize_label_candidates(label: str) -> list[str]:
             add(part.strip())
             add(_TRAILING_NUMBER_RE.sub("", part).strip())
 
-    # First word as last resort
-    first = (no_both or no_suffix or no_prefix or s).split()[0] if (no_both or no_suffix or no_prefix or s).split() else ""
-    add(first)
+    # NOTE: we deliberately do NOT fall back to the first word of a compound
+    # label. "Name der Schule" → "Name" would wrongly match the generic "Name"
+    # entry ("your full name") even though it means "name of the school".
+    # Multi-word labels we don't recognise in full are left for the AI, which
+    # can read the whole phrase in context.
 
     return [c for c in seen if c]
 
 
-def get_deterministic_translation(label: str, lang: str) -> Optional[str]:
+def get_deterministic_translation(label: str, lang: str, strict: bool = False) -> Optional[str]:
     """
     Return a hardcoded question for a common German form label, or None.
 
     Normalises the label before lookup so trailing/leading numbers and
     compound labels like "Zielort=Startort 16" are handled gracefully.
+
+    strict=False (default): if the label is known but the requested `lang` is
+    missing, fall back to the English question — a safe last resort for post-AI
+    backfill paths.
+    strict=True: return None when the label is known but `lang` is absent, so
+    the caller can route the field to the AI translator instead of silently
+    serving English for an unsupported locale.
     """
     for candidate in _normalize_label_candidates(label.strip()):
         candidate_lower = candidate.lower()
@@ -717,7 +726,10 @@ def get_deterministic_translation(label: str, lang: str) -> Optional[str]:
                     entry = val
                     break
         if entry:
-            return entry.get(lang) or entry.get("en")
+            val = entry.get(lang)
+            if val:
+                return val
+            return None if strict else entry.get("en")
     return None
 
 
@@ -730,12 +742,111 @@ def generic_untranslated_msg(original_label: str, lang: str) -> str:
     return f"{prefix}: {original_label}"
 
 
-def _groq_client():
-    from openai import OpenAI
-    key = os.environ.get("GROQ_API_KEY", "")
+# Anthropic model for question translation. Sonnet is the quality/cost sweet
+# spot for this short-string translation workload.
+ANTHROPIC_MODEL = "claude-sonnet-4-6"
+
+# Unicode block (start, end) per non-Latin target language. Used to sniff
+# whether the model actually wrote in the requested script. Latin-script and
+# unknown languages are omitted — we can't cheaply verify those, so they pass.
+_SCRIPT_RANGES: dict[str, tuple[int, int]] = {
+    "ar": (0x0600, 0x06FF), "fa": (0x0600, 0x06FF), "ur": (0x0600, 0x06FF),
+    "ru": (0x0400, 0x04FF), "uk": (0x0400, 0x04FF),
+    "hi": (0x0900, 0x097F), "bn": (0x0980, 0x09FF),
+    "am": (0x1200, 0x137F), "zh": (0x4E00, 0x9FFF),
+}
+
+
+def _looks_like_language(text: str, lang: str) -> bool:
+    """
+    Cheap sanity check that `text` is plausibly written in `lang`.
+
+    For non-Latin targets we require at least one character in the expected
+    Unicode block — this catches the common failure where the model answers in
+    English/German for an Arabic/Russian/etc. request. For Latin-script or
+    unmapped languages we cannot sniff cheaply, so we return True and rely on
+    the verbatim-label check in translate_fields.
+    """
+    rng = _SCRIPT_RANGES.get(lang)
+    if not rng:
+        return True
+    lo, hi = rng
+    return any(lo <= ord(ch) <= hi for ch in text)
+
+
+def _extract_json(text: str) -> dict:
+    """Parse a JSON object from model output, tolerating surrounding prose."""
+    text = (text or "").strip()
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+    match = re.search(r"\{[\s\S]*\}", text)
+    if match:
+        try:
+            return json.loads(match.group())
+        except Exception:
+            return {}
+    return {}
+
+
+def _resolve_anthropic_key() -> str:
+    """
+    Effective Anthropic key, or "" when missing/placeholder.
+
+    Reads `settings.anthropic_api_key` first (this is what loads backend/.env,
+    since nothing calls load_dotenv()), then falls back to a real OS env var for
+    deployment. A key left as the REPLACE placeholder counts as unset.
+    """
+    key = ""
+    try:
+        from app.config import settings
+        key = settings.anthropic_api_key or ""
+    except Exception:
+        key = ""
+    key = (key or os.environ.get("ANTHROPIC_API_KEY", "")).strip()
     if not key or key.startswith("REPLACE"):
+        return ""
+    return key
+
+
+def anthropic_key_configured() -> bool:
+    """True when a usable (non-placeholder) Anthropic key is available."""
+    return bool(_resolve_anthropic_key())
+
+
+def anthropic_available() -> bool:
+    """
+    True when a real Claude call can actually be made *in this interpreter*: a
+    usable key is configured AND the `anthropic` SDK imports.
+
+    Use this to gate the live AI paths (e.g. the scan vision call) so they skip
+    cleanly when the SDK isn't installed, instead of entering the branch and
+    returning empty. Use `anthropic_key_configured()` only to detect the
+    key-set-but-SDK-missing misconfiguration (see main._check_ai_runtime).
+    """
+    if not _resolve_anthropic_key():
+        return False
+    try:
+        import anthropic  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _anthropic_client():
+    """
+    Return an Anthropic client, or None when the SDK is missing or no real key
+    is configured (so callers fall back to the deterministic table — never crash).
+    """
+    try:
+        import anthropic
+    except ImportError:
         return None
-    return OpenAI(base_url="https://api.groq.com/openai/v1", api_key=key)
+    key = _resolve_anthropic_key()
+    if not key:
+        return None
+    return anthropic.Anthropic(api_key=key)
 
 
 def translate_fields(
@@ -744,11 +855,12 @@ def translate_fields(
     document_language: str = "de",
 ) -> dict[str, dict]:
     """
-    Translate field labels + options into user_language via Groq.
+    Translate field labels + options into user_language via Anthropic (Claude).
 
-    Falls back to static_fallback when Groq unavailable.
+    Falls back to static_fallback when the Anthropic SDK/key is unavailable or
+    the model returns wrong-language output.
     """
-    client = _groq_client()
+    client = _anthropic_client()
     if client is None:
         return static_fallback(fields, user_language)
 
@@ -758,10 +870,19 @@ def translate_fields(
     field_lines: list[str] = []
     for f in fields:
         line = f"- {f['field_name']} (type={f['field_type']}"
-        if f.get("options"):
+        opt_labels = f.get("option_labels") or {}
+        if opt_labels:
+            # value='German label' pairs so the model translates the REAL choice
+            # text (e.g. 0='Einzelfahrt') instead of the bare export code "0".
+            pairs = ", ".join(f"{v}={lbl!r}" for v, lbl in opt_labels.items())
+            line += f", options=[{pairs}]"
+        elif f.get("options"):
             line += f", options={f['options']}"
         if f.get("original_label") and f["original_label"] != f["field_name"]:
             line += f", label='{f['original_label']}'"
+        if f.get("section_title"):
+            # Section header gives a bare field name its real meaning.
+            line += f", section='{f['section_title']}'"
         line += ")"
         field_lines.append(line)
 
@@ -779,6 +900,13 @@ STRICT RULES:
 5. For number fields: always say what unit is needed (euros, kilometres, etc.).
 6. For checkbox fields: phrase as a yes/no question.
 7. Use formal/polite register appropriate for government forms.
+8. Use the "section" context to understand what a short field name means, and
+   make the question specific to it. Example: label 'Tag' with section 'Datum des
+   Schulausflugstages' means the DAY OF THE SCHOOL TRIP — ask "What day is the
+   school trip?", NOT "what day are you filling this form?". A field 'Ort' under
+   section 'Name und Anschrift der Schule' is the SCHOOL's town, not the user's.
+9. When options are given as value='label' pairs, translate the LABEL meaning;
+   the JSON key in translated_options stays the exact value (the part before '=').
 
 Form fields from the {source} document:
 {chr(10).join(field_lines)}
@@ -788,7 +916,7 @@ Respond with a single JSON object. Keys = exact field names above. For each fiel
 - "help": one simple helpful sentence in {target} (what to write and how)
 - "example": a concrete example answer in {target} (leave empty string if obvious)
 - "format": short format instruction in {target} (e.g. "DD.MM.YYYY", leave empty if not needed)
-- "translated_options": map each original option value to its {target} translation (empty object if no options)
+- "translated_options": map each option VALUE (the part before '=') to its {target} translation of that option's meaning (empty object if no options)
 
 Example if {target} were French:
 {{
@@ -811,29 +939,50 @@ Example if {target} were French:
 Return ONLY valid JSON. No other text."""
 
     try:
-        resp = client.chat.completions.create(
-            model="meta-llama/llama-4-scout-17b-16e-instruct",
-            messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
-            temperature=0.1,
+        resp = client.messages.create(
+            model=ANTHROPIC_MODEL,
             max_tokens=4000,
+            temperature=0.1,
+            messages=[{"role": "user", "content": prompt}],
         )
-        result = json.loads(resp.choices[0].message.content)
-        # Validate: warn if any question appears to be in the wrong language
-        # (quick heuristic: for non-German/non-English targets, reject questions
-        #  that are identical to the original_label — means AI didn't translate)
-        if user_language not in ("de", document_language):
-            label_by_name = {f["field_name"]: f.get("original_label", "") for f in fields}
-            untranslated = [
-                fid for fid, tr in result.items()
-                if tr.get("question") == label_by_name.get(fid)
-            ]
-            if len(untranslated) > len(fields) / 2:
-                # More than half not translated — fall back
-                return static_fallback(fields, user_language)
-        return result
+        text = resp.content[0].text if resp.content else ""
+        result = _extract_json(text or "")
     except Exception:
         return static_fallback(fields, user_language)
+
+    if not isinstance(result, dict) or not result:
+        return static_fallback(fields, user_language)
+
+    # ── Wrong-language / not-translated guard ────────────────────────────────
+    # The old guard only caught questions returned verbatim as the German label.
+    # We also catch wrong-SCRIPT output (e.g. English/German when Arabic was
+    # requested) via a cheap Unicode-block sniff. Behavior:
+    #   • > half the fields look wrong → whole-batch deterministic fallback
+    #   • otherwise                    → repair only the bad fields in place
+    #                                    (deterministic table, else raw label)
+    if user_language not in ("de", document_language):
+        label_by_name = {f["field_name"]: f.get("original_label", "") for f in fields}
+        bad: list[str] = []
+        for fid, tr in result.items():
+            q = tr.get("question", "") if isinstance(tr, dict) else ""
+            if (not q
+                    or q == label_by_name.get(fid)
+                    or not _looks_like_language(q, user_language)):
+                bad.append(fid)
+        if len(bad) > len(fields) / 2:
+            return static_fallback(fields, user_language)
+        for fid in bad:
+            label = label_by_name.get(fid, "")
+            repaired = get_deterministic_translation(label, user_language) or label
+            if isinstance(result.get(fid), dict):
+                result[fid]["question"] = repaired
+            else:
+                result[fid] = {
+                    "question": repaired,
+                    "explanation": "",
+                    "translated_options": {},
+                }
+    return result
 
 
 def static_fallback(fields: list[dict], user_language: str) -> dict[str, dict]:
