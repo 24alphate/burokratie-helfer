@@ -18,18 +18,17 @@ No database writes.  No file system writes.  Cold-start-proof.
 
 Diagnostic query parameters
 -----------------------------
-no_ai=true   Bypass Groq completely. Uses the raw PDF label as the question text.
+no_ai=true   Bypass the AI translator completely. Uses the raw PDF label as the question text.
              Use this to isolate whether wrong questions come from extraction or AI.
 
 The response always includes:
   raw_extracted_fields  — field map BEFORE translation (extraction ground truth)
   ai_comparison         — side-by-side original_label vs AI question for every field
-  ai_used               — whether Groq was attempted (false when no_ai=true or key missing)
+  ai_used               — whether the AI translator was attempted (false when no_ai=true or key missing)
 """
 from __future__ import annotations
 
 import logging
-import os
 from typing import Optional
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
@@ -44,15 +43,30 @@ from app.services.pdf_pipeline import (
     validate_no_hallucinations,
 )
 from app.services.pdf_token import sign_pdf_token
-from app.services.question_translator import translate_fields, static_fallback, get_deterministic_translation
-from app.services.semantic_questions import infer_semantic_key, lookup_semantic
-from app.services.verified_questions import lookup_verified
+from app.services.question_translator import (
+    translate_fields, static_fallback, get_deterministic_translation, anthropic_available,
+)
+from app.services.semantic_questions import infer_semantic_key, lookup_semantic, lookup_semantic_strict
+from app.services.verified_questions import lookup_verified, lookup_verified_strict
 
 log = logging.getLogger("burokratie.process_pdf")
 
 router = APIRouter(tags=["stateless"])
 
 MAX_SIZE_BYTES = settings.max_upload_size_mb * 1024 * 1024
+
+# Feature D — semantic keys whose meaning depends on the field's section context.
+# A bare "Tag"/"Ort"/"Postleitzahl" maps to one of these, but the curated table
+# question assumes a personal/today context ("the day YOU fill this form",
+# "where YOU live"). When such a field also has a recovered section_title, we
+# skip the context-blind tables and let the AI translate with that context.
+_CONTEXT_AMBIGUOUS_SEMANTIC = {
+    "date.day", "date.month", "date.year",
+    "address.city", "address.postal_code", "address.street",
+    "address.house_number", "address.country",
+    "amount.count", "amount.eur",
+    "submission.date", "submission.place_date",
+}
 
 
 # ── Diagnostic response models ────────────────────────────────────────────────
@@ -94,7 +108,7 @@ class ProcessPdfResponse(BaseModel):
     # ai_comparison: original_label vs AI question, side by side.
     #   If ai_used=false for an entry, ai_question == original_label (no AI involved).
     ai_comparison: list[AIComparisonEntry] = []
-    # Whether Groq was called (false when no_ai=true or GROQ_API_KEY not set)
+    # Whether the AI translator was called (false when no_ai=true or ANTHROPIC_API_KEY not set)
     ai_used: bool = False
 
 
@@ -247,6 +261,44 @@ async def process_pdf(
     #       no_text_found, ocr_unavailable, failed) OR readable but zero
     #       fields extracted. Same diagnostic-only response as before.
     ocr_diag_for_report: dict | None = None
+
+    # Stage 4C — Claude Vision. For a scanned/photographed form (no text layer,
+    # no AcroForm) we render the pages and let Claude read the blank field
+    # structure directly. On success we promote Level 4 → 3 and let the normal
+    # translate/quality/grounding pipeline run; the existing Tesseract block
+    # below is then skipped (support_level is no longer 4). Best-effort: fields
+    # are shown with needs_review and the UI warns the user to verify. Falls
+    # through to Tesseract when there's no key or Claude found nothing.
+    if extraction.support_level == 4 and anthropic_available():
+        from app.services.ocr.claude_scan import extract_fields_from_scan
+        scan_fields = extract_fields_from_scan(content)
+        if scan_fields:
+            log.info("process-pdf CLAUDE_SCAN level=4→3 fields=%d", len(scan_fields))
+            from app.services.pdf_pipeline import ExtractionResult
+            extraction = ExtractionResult(
+                pdf_type="ocr",
+                fields=scan_fields,
+                total_pages=extraction.total_pages,
+                template_id=None,
+                extraction_source="ocr",
+                support_level=3,
+            )
+            extracted_ids = [e.field_id for e in extraction.fields]
+            # Minimal diagnostic so the frontend shows the "read via OCR/vision —
+            # please verify" banner (Stage 4B promotion note).
+            ocr_diag_for_report = {
+                "provider": "claude-vision",
+                "page_count": extraction.total_pages,
+                "pages": [],
+                "full_text": "",
+                "average_confidence": 0.0,
+                "detected_languages": [],
+                "readable_pages": extraction.total_pages,
+                "unreadable_pages": 0,
+                "diagnostic_status": "readable",
+                "user_message": "",
+            }
+
     if extraction.support_level == 4:
         from app.services.ocr.tesseract_provider import get_default_provider
         from app.services.ocr.text_to_fields import extract_fields_from_ocr
@@ -311,9 +363,12 @@ async def process_pdf(
     # checkboxes. Strictly grounded (model can only reference real widgets) and
     # fully optional — any failure leaves the heuristic labels in place.
     vision_groups_for_token: list[dict] = []
-    if extraction.support_level == 2 and settings.vision_backend == "gemini":
+    if extraction.support_level == 2 and settings.vision_backend in ("gemini", "claude"):
         import asyncio
-        from app.services.vision.gemini_form_vision import enrich_acroform
+        if settings.vision_backend == "claude":
+            from app.services.vision.claude_form_vision import enrich_acroform
+        else:
+            from app.services.vision.gemini_form_vision import enrich_acroform
         try:
             enr = await asyncio.to_thread(enrich_acroform, extraction.fields, content)
         except Exception as e:
@@ -350,6 +405,25 @@ async def process_pdf(
             log.info("process-pdf VISION_DONE labels=%d groups=%d field_count=%d",
                      len(enr.labels), len(enr.groups), len(extraction.fields))
 
+    # ── 1c. Option-label vision fallback (Feature E) ─────────────────────────
+    # Positional recovery (run during extraction) handles most German forms,
+    # where the choice label sits to the right of the box. For radios it missed,
+    # fall back to Claude Vision to read the option labels. No-op unless there
+    # are radios still lacking labels AND a usable Anthropic SDK/key — so forms
+    # that resolved positionally never incur an extra AI call.
+    if extraction.support_level == 2 and anthropic_available():
+        missing_opts = [
+            e for e in extraction.fields
+            if e.field_type == "radio" and e.options and not e.option_labels
+        ]
+        if missing_opts:
+            from app.services.ocr.claude_scan import recover_option_labels_via_vision
+            try:
+                recover_option_labels_via_vision(content, extraction.fields)
+                log.info("process-pdf OPTION_VISION_FALLBACK radios=%d", len(missing_opts))
+            except Exception as e:
+                log.warning("process-pdf OPTION_VISION_FALLBACK failed err=%s", e)
+
     # ── 2. Build raw_extracted_fields (BEFORE translation) ───────────────────
     raw_extracted_fields = [
         RawFieldEntry(
@@ -374,8 +448,17 @@ async def process_pdf(
             entry.semantic_key = infer_semantic_key(entry.original_label)
 
     # ── 4. Pre-resolve questions: verified → semantic → deterministic ────────
-    # These are free (no AI cost) and highest quality.
-    # Only unresolved fields are sent to Groq.
+    # These are free (no AI cost) and highest quality. Only unresolved fields
+    # are sent to the AI translator.
+    #
+    # Locale coverage: the verified/semantic/deterministic tables cover only a
+    # subset of locales. For NON-verified extractions (Level 2/3) we use the
+    # STRICT lookups so a field whose locale isn't in a table is left unresolved
+    # and routed to AI for a real translation — instead of silently pre-resolving
+    # to the English fallback (which shadowed the AI for ~15 advertised locales
+    # like it/pl/fa/ur). Verified templates keep the permissive (English-fallback)
+    # lookups so Level 1 never reaches AI.
+    prefer_strict = extraction.extraction_source != "verified_template"
     pre_resolved: dict[str, dict] = {}
     for entry in extraction.fields:
         fid   = entry.field_id
@@ -390,8 +473,24 @@ async def process_pdf(
         if entry.confidence <= 0.5:
             continue
 
+        # Feature D + E — route to the AI translator instead of the context-blind
+        # tables (incl. label-based verified entries) when:
+        #   (a) the field's meaning depends on its section — a bare "Tag" under
+        #       "Datum des Schulausflugstages" must NOT become "the day you fill
+        #       this form"; or
+        #   (b) it's a choice field whose real option labels we recovered and
+        #       want translated too (the tables don't translate options).
+        # Both conditions can only be true for Level 2/3 extractions — Level 1
+        # verified templates set neither section_title nor option_labels — so
+        # verified templates keep their curated, no-AI questions.
+        _ambiguous = entry.semantic_key in _CONTEXT_AMBIGUOUS_SEMANTIC and bool(entry.section_title)
+        if _ambiguous or entry.option_labels:
+            continue
+
         # Priority 1: verified human question
-        verified = lookup_verified(fid, label, user_language)
+        verified = (lookup_verified_strict if prefer_strict else lookup_verified)(
+            fid, label, user_language
+        )
         if verified:
             pre_resolved[fid] = {
                 "question": verified["question"],
@@ -406,7 +505,9 @@ async def process_pdf(
 
         # Priority 2: semantic key question
         if entry.semantic_key:
-            sem = lookup_semantic(entry.semantic_key, user_language)
+            sem = (lookup_semantic_strict if prefer_strict else lookup_semantic)(
+                entry.semantic_key, user_language
+            )
             if sem:
                 pre_resolved[fid] = {
                     "question": sem["question"],
@@ -420,7 +521,7 @@ async def process_pdf(
                 continue
 
         # Priority 3: deterministic translation table
-        det = get_deterministic_translation(label, user_language)
+        det = get_deterministic_translation(label, user_language, strict=prefer_strict)
         if det:
             pre_resolved[fid] = {
                 "question": det,
@@ -429,45 +530,47 @@ async def process_pdf(
                 "_source": "deterministic",
             }
 
-    # Build Groq input for unresolved fields only.
+    # Build the AI translator input for unresolved fields only.
     # Phase F1 follow-up: also skip manual (confidence <= 0.5) fields here
-    # so they don't show up in ai_call_count even when GROQ_API_KEY is unset
+    # so they don't show up in ai_call_count even when ANTHROPIC_API_KEY is unset
     # (translate_fields can still fall through to static_fallback). Same
     # rationale as the pre_resolved skip above.
-    fields_for_groq = [
+    fields_for_ai = [
         {
             "field_name":     e.field_id,
             "field_type":     e.field_type,
             "options":        e.options,
+            "option_labels":  e.option_labels,   # Feature E — real choice text
             "original_label": e.original_label,
+            "section_title":  e.section_title,    # Feature D — section context
         }
         for e in extraction.fields
         if e.field_id not in pre_resolved and e.confidence > 0.5
     ]
 
-    groq_key_set = bool(os.environ.get("GROQ_API_KEY", "").strip())
+    ai_key_set = anthropic_available()
 
-    if no_ai or not fields_for_groq:
-        if fields_for_groq:
+    if no_ai or not fields_for_ai:
+        if fields_for_ai:
             # Use static fallback for unresolved fields when no_ai=True
-            ai_translations = static_fallback(fields_for_groq, user_language)
+            ai_translations = static_fallback(fields_for_ai, user_language)
             for fid in ai_translations:
                 ai_translations[fid]["_source"] = "deterministic"
         else:
             ai_translations = {}
         ai_was_used = False
-        log.info("process-pdf no_ai=%s groq_unresolved=%d pre_resolved=%d",
-                 no_ai, len(fields_for_groq), len(pre_resolved))
+        log.info("process-pdf no_ai=%s ai_unresolved=%d pre_resolved=%d",
+                 no_ai, len(fields_for_ai), len(pre_resolved))
     else:
-        ai_translations = translate_fields(fields_for_groq, user_language, document_language)
+        ai_translations = translate_fields(fields_for_ai, user_language, document_language)
         for fid in ai_translations:
             if "_source" not in ai_translations[fid]:
                 ai_translations[fid]["_source"] = "ai"
-        ai_was_used = groq_key_set
+        ai_was_used = ai_key_set
 
     # Merge: pre_resolved wins over AI (verified/semantic/deterministic beat AI)
     raw_translations = {**ai_translations, **pre_resolved}
-    ai_call_count = len(fields_for_groq) if not no_ai else 0
+    ai_call_count = len(fields_for_ai) if not no_ai else 0
     ai_skip_count = len(pre_resolved)
 
     # Level 1 invariant: verified templates must never reach Groq

@@ -16,6 +16,22 @@ TEST_DATABASE_URL = "sqlite:///./test.db"
 TEMPLATE_JSON = Path(__file__).parent.parent / "app" / "form_templates" / "alg2_antrag_v1.json"
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _offline_ai():
+    """
+    Keep the suite hermetic: never make a real Anthropic call, even when a real
+    ANTHROPIC_API_KEY is present in .env / the environment. Translation falls
+    back to the deterministic table and the Claude-vision scan path returns [],
+    exactly as the tests were designed for. Tests that need the AI path "on"
+    opt in locally (e.g. by patching anthropic_key_configured + mocking the call).
+    """
+    import app.services.question_translator as qt
+    mp = pytest.MonkeyPatch()
+    mp.setattr(qt, "_resolve_anthropic_key", lambda: "")
+    yield
+    mp.undo()
+
+
 @pytest.fixture(scope="session")
 def test_engine():
     eng = create_engine(TEST_DATABASE_URL, connect_args={"check_same_thread": False})
