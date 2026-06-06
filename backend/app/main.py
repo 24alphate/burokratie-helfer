@@ -1,4 +1,6 @@
 import json
+import logging
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -14,6 +16,43 @@ from app.api.v1 import sessions, cases, documents, questions, templates, pdf, pr
 from app.services.ocr import OCRServiceFactory
 from app.services.translation import TranslationServiceFactory
 from app.services.pdf_generator.pypdf_generator import PDFGeneratorFactory
+
+log = logging.getLogger("burokratie.main")
+
+
+def _check_ai_runtime() -> None:
+    """
+    Fail LOUD (not silently) when an Anthropic key is configured but the SDK is
+    not importable in THIS interpreter.
+
+    The footgun: launching uvicorn on a Python that lacks `anthropic` (e.g. a
+    global interpreter on PATH instead of backend/.venv). The app still boots,
+    but translation silently degrades to the German table and scanning can't use
+    Claude Vision. This check surfaces the mismatch at startup instead.
+    """
+    from app.services.question_translator import anthropic_key_configured
+    key_set = anthropic_key_configured()
+    try:
+        import anthropic  # noqa: F401
+        sdk_ok = True
+    except Exception:
+        sdk_ok = False
+
+    if key_set and not sdk_ok:
+        log.critical(
+            "AI MISCONFIGURED: an Anthropic key is set but the 'anthropic' SDK is "
+            "NOT importable in this interpreter (%s). Translation will fall back to "
+            "the German table and scanning will fail. You are almost certainly "
+            "running the server on a different Python than backend/.venv. Fix: run "
+            "with the venv, e.g.  backend\\.venv\\Scripts\\python -m uvicorn "
+            "app.main:app  — or  pip install -r requirements.txt  into the active "
+            "interpreter.",
+            sys.executable,
+        )
+    elif key_set:
+        log.info("AI runtime OK: anthropic importable + key configured (%s).", sys.executable)
+    else:
+        log.info("AI runtime: no Anthropic key — using the deterministic table (%s).", sys.executable)
 
 
 def _seed_templates_if_needed():
@@ -46,6 +85,8 @@ async def lifespan(app: FastAPI):
     app.state.ocr_service = OCRServiceFactory.create(settings.ocr_backend)
     app.state.translation_service = TranslationServiceFactory.create(settings.translation_backend)
     app.state.pdf_generator = PDFGeneratorFactory.create("pypdf")
+
+    _check_ai_runtime()
 
     yield
 
