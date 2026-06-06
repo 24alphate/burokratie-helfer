@@ -383,10 +383,17 @@ def _walk_field_tree(
     seen: set[str],
     widget_positions: dict,
     depth: int = 0,
+    inherited_ft=None,
+    inherited_ff=None,
 ) -> list[FieldMapEntry]:
     """
     Recursive AcroForm field-tree traversal.
     Handles intermediate group nodes (no /FT, has /Kids).
+
+    /FT and /Ff are *inheritable* attributes per the PDF spec: a terminal field
+    may omit them and take the parent node's value. We thread the inherited
+    values down the recursion so radio / checkbox / choice fields that rely on
+    inheritance get their real type instead of silently defaulting to "text".
     """
     results: list[FieldMapEntry] = []
     for field_ref in list(fields_array):
@@ -394,14 +401,25 @@ def _walk_field_tree(
             break
         try:
             f = field_ref.get_object() if hasattr(field_ref, "get_object") else field_ref
-            ft_raw = f.get("/FT")
+            own_ft = f.get("/FT")
+            ft_raw = own_ft if own_ft is not None else inherited_ft  # /FT inheritable
             has_kids = "/Kids" in f
 
+            # /Ff (field flags: radio / pushbutton / multiselect bits) is
+            # inheritable too — own flags else the parent's.
+            own_ff = f.get("/Ff")
+            ff_source = own_ff if own_ff is not None else inherited_ff
+
+            # Non-terminal grouping node: no resolvable /FT but has kids →
+            # recurse, propagating the inheritable /FT and /Ff to descendants.
             if ft_raw is None and has_kids and depth < 5:
                 kids = f.get("/Kids", [])
                 if hasattr(kids, "get_object"):
                     kids = kids.get_object()
-                results.extend(_walk_field_tree(kids, seen, widget_positions, depth + 1))
+                results.extend(_walk_field_tree(
+                    kids, seen, widget_positions, depth + 1,
+                    inherited_ft=ft_raw, inherited_ff=ff_source,
+                ))
                 continue
 
             name = f.get("/T", "")
@@ -414,7 +432,7 @@ def _walk_field_tree(
 
             ft_str = str(ft_raw) if ft_raw else "/Tx"
             try:
-                flags = int(str(f.get("/Ff", "0")).split(".")[0] or "0")
+                flags = int(str(ff_source).split(".")[0]) if ff_source is not None else 0
             except (ValueError, TypeError):
                 flags = 0
             ftype = _classify_field_type(ft_str, flags) or "text"
@@ -436,8 +454,19 @@ def _walk_field_tree(
                         options.append(str(o[0]) if isinstance(o, (list, tuple)) else str(o))
                 except Exception:
                     pass
-            elif ftype == "radio" and has_kids:
-                options = _radio_options_from_kids(f)
+            elif ftype == "radio":
+                options = _radio_options_from_kids(f) if has_kids else []
+                if not options:
+                    # Some radio groups expose export values via /Opt on the
+                    # parent instead of per-kid /AP/N — use it as a fallback.
+                    try:
+                        raw_opts = f.get("/Opt", [])
+                        for o in (raw_opts if isinstance(raw_opts, list) else []):
+                            v = str(o[0]) if isinstance(o, (list, tuple)) else str(o)
+                            if v and v not in options:
+                                options.append(v)
+                    except Exception:
+                        pass
 
             page_num, bbox = widget_positions.get(clean, (1, None))
 
