@@ -248,6 +248,44 @@ async def process_pdf(
     #       no_text_found, ocr_unavailable, failed) OR readable but zero
     #       fields extracted. Same diagnostic-only response as before.
     ocr_diag_for_report: dict | None = None
+
+    # Stage 4C — Claude Vision. For a scanned/photographed form (no text layer,
+    # no AcroForm) we render the pages and let Claude read the blank field
+    # structure directly. On success we promote Level 4 → 3 and let the normal
+    # translate/quality/grounding pipeline run; the existing Tesseract block
+    # below is then skipped (support_level is no longer 4). Best-effort: fields
+    # are shown with needs_review and the UI warns the user to verify. Falls
+    # through to Tesseract when there's no key or Claude found nothing.
+    if extraction.support_level == 4 and anthropic_key_configured():
+        from app.services.ocr.claude_scan import extract_fields_from_scan
+        scan_fields = extract_fields_from_scan(content)
+        if scan_fields:
+            log.info("process-pdf CLAUDE_SCAN level=4→3 fields=%d", len(scan_fields))
+            from app.services.pdf_pipeline import ExtractionResult
+            extraction = ExtractionResult(
+                pdf_type="ocr",
+                fields=scan_fields,
+                total_pages=extraction.total_pages,
+                template_id=None,
+                extraction_source="ocr",
+                support_level=3,
+            )
+            extracted_ids = [e.field_id for e in extraction.fields]
+            # Minimal diagnostic so the frontend shows the "read via OCR/vision —
+            # please verify" banner (Stage 4B promotion note).
+            ocr_diag_for_report = {
+                "provider": "claude-vision",
+                "page_count": extraction.total_pages,
+                "pages": [],
+                "full_text": "",
+                "average_confidence": 0.0,
+                "detected_languages": [],
+                "readable_pages": extraction.total_pages,
+                "unreadable_pages": 0,
+                "diagnostic_status": "readable",
+                "user_message": "",
+            }
+
     if extraction.support_level == 4:
         from app.services.ocr.tesseract_provider import get_default_provider
         from app.services.ocr.text_to_fields import extract_fields_from_ocr
