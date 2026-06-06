@@ -44,9 +44,10 @@ class Settings(BaseSettings):
     ocr_backend: str = "mock"
     translation_backend: str = "mock"
     # Vision-LLM AcroForm enrichment (Level 2). "off" = use the positional
-    # heuristic only; "gemini" = render pages and ask Gemini 2.0 Flash to label
-    # widgets + group checkboxes (needs GEMINI_API_KEY). Falls back to the
-    # heuristic on any error, so this is always a safe quality upgrade.
+    # heuristic only; "gemini" = Gemini 2.0 Flash (needs GEMINI_API_KEY);
+    # "claude" = Claude Vision (needs ANTHROPIC_API_KEY). Both render the page,
+    # label widgets, and group sibling checkboxes into one question. Falls back
+    # to the heuristic on any error, so this is always a safe quality upgrade.
     vision_backend: str = "off"
     upload_dir: str = _DEFAULT_UPLOAD
     generated_dir: str = _DEFAULT_GENERATED

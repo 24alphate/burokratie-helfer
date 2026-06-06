@@ -694,19 +694,28 @@ def _normalize_label_candidates(label: str) -> list[str]:
             add(part.strip())
             add(_TRAILING_NUMBER_RE.sub("", part).strip())
 
-    # First word as last resort
-    first = (no_both or no_suffix or no_prefix or s).split()[0] if (no_both or no_suffix or no_prefix or s).split() else ""
-    add(first)
+    # NOTE: we deliberately do NOT fall back to the first word of a compound
+    # label. "Name der Schule" → "Name" would wrongly match the generic "Name"
+    # entry ("your full name") even though it means "name of the school".
+    # Multi-word labels we don't recognise in full are left for the AI, which
+    # can read the whole phrase in context.
 
     return [c for c in seen if c]
 
 
-def get_deterministic_translation(label: str, lang: str) -> Optional[str]:
+def get_deterministic_translation(label: str, lang: str, strict: bool = False) -> Optional[str]:
     """
     Return a hardcoded question for a common German form label, or None.
 
     Normalises the label before lookup so trailing/leading numbers and
     compound labels like "Zielort=Startort 16" are handled gracefully.
+
+    strict=False (default): if the label is known but the requested `lang` is
+    missing, fall back to the English question — a safe last resort for post-AI
+    backfill paths.
+    strict=True: return None when the label is known but `lang` is absent, so
+    the caller can route the field to the AI translator instead of silently
+    serving English for an unsupported locale.
     """
     for candidate in _normalize_label_candidates(label.strip()):
         candidate_lower = candidate.lower()
@@ -717,7 +726,10 @@ def get_deterministic_translation(label: str, lang: str) -> Optional[str]:
                     entry = val
                     break
         if entry:
-            return entry.get(lang) or entry.get("en")
+            val = entry.get(lang)
+            if val:
+                return val
+            return None if strict else entry.get("en")
     return None
 
 
@@ -801,6 +813,25 @@ def _resolve_anthropic_key() -> str:
 def anthropic_key_configured() -> bool:
     """True when a usable (non-placeholder) Anthropic key is available."""
     return bool(_resolve_anthropic_key())
+
+
+def anthropic_available() -> bool:
+    """
+    True when a real Claude call can actually be made *in this interpreter*: a
+    usable key is configured AND the `anthropic` SDK imports.
+
+    Use this to gate the live AI paths (e.g. the scan vision call) so they skip
+    cleanly when the SDK isn't installed, instead of entering the branch and
+    returning empty. Use `anthropic_key_configured()` only to detect the
+    key-set-but-SDK-missing misconfiguration (see main._check_ai_runtime).
+    """
+    if not _resolve_anthropic_key():
+        return False
+    try:
+        import anthropic  # noqa: F401
+        return True
+    except Exception:
+        return False
 
 
 def _anthropic_client():

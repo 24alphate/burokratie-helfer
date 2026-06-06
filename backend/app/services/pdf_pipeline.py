@@ -481,7 +481,13 @@ def _walk_field_tree(
             # Fall back to a cleaned version of the technical field name.
             # This strips prefixes (txtf/date/chk …) and splits camelCase
             # so the AI translator has meaningful context instead of noise.
-            if not human_label or human_label == clean:
+            #
+            # Also reject a WEAK /TU: some forms bake a junk tooltip (e.g. a
+            # 2-char "we" placeholder) into /TU. Trusting it would surface "we"
+            # as the question label, so when /TU is weak we prefer the cleaned
+            # field name (e.g. "Startort_11" → "Startort"). _associate_labels_by_
+            # position may still recover a better label from the page afterwards.
+            if not human_label or human_label == clean or _is_weak_label(human_label):
                 human_label = _clean_acroform_field_name(clean)
 
             results.append(FieldMapEntry(

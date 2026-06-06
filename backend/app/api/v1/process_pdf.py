@@ -44,10 +44,10 @@ from app.services.pdf_pipeline import (
 )
 from app.services.pdf_token import sign_pdf_token
 from app.services.question_translator import (
-    translate_fields, static_fallback, get_deterministic_translation, anthropic_key_configured,
+    translate_fields, static_fallback, get_deterministic_translation, anthropic_available,
 )
-from app.services.semantic_questions import infer_semantic_key, lookup_semantic
-from app.services.verified_questions import lookup_verified
+from app.services.semantic_questions import infer_semantic_key, lookup_semantic, lookup_semantic_strict
+from app.services.verified_questions import lookup_verified, lookup_verified_strict
 
 log = logging.getLogger("burokratie.process_pdf")
 
@@ -256,7 +256,7 @@ async def process_pdf(
     # below is then skipped (support_level is no longer 4). Best-effort: fields
     # are shown with needs_review and the UI warns the user to verify. Falls
     # through to Tesseract when there's no key or Claude found nothing.
-    if extraction.support_level == 4 and anthropic_key_configured():
+    if extraction.support_level == 4 and anthropic_available():
         from app.services.ocr.claude_scan import extract_fields_from_scan
         scan_fields = extract_fields_from_scan(content)
         if scan_fields:
@@ -350,9 +350,12 @@ async def process_pdf(
     # checkboxes. Strictly grounded (model can only reference real widgets) and
     # fully optional — any failure leaves the heuristic labels in place.
     vision_groups_for_token: list[dict] = []
-    if extraction.support_level == 2 and settings.vision_backend == "gemini":
+    if extraction.support_level == 2 and settings.vision_backend in ("gemini", "claude"):
         import asyncio
-        from app.services.vision.gemini_form_vision import enrich_acroform
+        if settings.vision_backend == "claude":
+            from app.services.vision.claude_form_vision import enrich_acroform
+        else:
+            from app.services.vision.gemini_form_vision import enrich_acroform
         try:
             enr = await asyncio.to_thread(enrich_acroform, extraction.fields, content)
         except Exception as e:
@@ -413,8 +416,17 @@ async def process_pdf(
             entry.semantic_key = infer_semantic_key(entry.original_label)
 
     # ── 4. Pre-resolve questions: verified → semantic → deterministic ────────
-    # These are free (no AI cost) and highest quality.
-    # Only unresolved fields are sent to Groq.
+    # These are free (no AI cost) and highest quality. Only unresolved fields
+    # are sent to the AI translator.
+    #
+    # Locale coverage: the verified/semantic/deterministic tables cover only a
+    # subset of locales. For NON-verified extractions (Level 2/3) we use the
+    # STRICT lookups so a field whose locale isn't in a table is left unresolved
+    # and routed to AI for a real translation — instead of silently pre-resolving
+    # to the English fallback (which shadowed the AI for ~15 advertised locales
+    # like it/pl/fa/ur). Verified templates keep the permissive (English-fallback)
+    # lookups so Level 1 never reaches AI.
+    prefer_strict = extraction.extraction_source != "verified_template"
     pre_resolved: dict[str, dict] = {}
     for entry in extraction.fields:
         fid   = entry.field_id
@@ -430,7 +442,9 @@ async def process_pdf(
             continue
 
         # Priority 1: verified human question
-        verified = lookup_verified(fid, label, user_language)
+        verified = (lookup_verified_strict if prefer_strict else lookup_verified)(
+            fid, label, user_language
+        )
         if verified:
             pre_resolved[fid] = {
                 "question": verified["question"],
@@ -445,7 +459,9 @@ async def process_pdf(
 
         # Priority 2: semantic key question
         if entry.semantic_key:
-            sem = lookup_semantic(entry.semantic_key, user_language)
+            sem = (lookup_semantic_strict if prefer_strict else lookup_semantic)(
+                entry.semantic_key, user_language
+            )
             if sem:
                 pre_resolved[fid] = {
                     "question": sem["question"],
@@ -459,7 +475,7 @@ async def process_pdf(
                 continue
 
         # Priority 3: deterministic translation table
-        det = get_deterministic_translation(label, user_language)
+        det = get_deterministic_translation(label, user_language, strict=prefer_strict)
         if det:
             pre_resolved[fid] = {
                 "question": det,
@@ -484,7 +500,7 @@ async def process_pdf(
         if e.field_id not in pre_resolved and e.confidence > 0.5
     ]
 
-    ai_key_set = anthropic_key_configured()
+    ai_key_set = anthropic_available()
 
     if no_ai or not fields_for_ai:
         if fields_for_ai:

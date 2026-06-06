@@ -92,7 +92,7 @@ def test_scanned_pdf_promoted_to_level3_via_claude(monkeypatch):
     from app.services.ocr import claude_scan as cs
     from app.services.pdf_pipeline import FieldMapEntry
 
-    monkeypatch.setattr(endpoint, "anthropic_key_configured", lambda: True)
+    monkeypatch.setattr(endpoint, "anthropic_available", lambda: True)
     fake = [
         FieldMapEntry(field_id="vorname", original_label="Vorname", field_type="text",
                       source_page=1, confidence=0.72, source="ocr",
