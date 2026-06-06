@@ -9,6 +9,7 @@ import { SelectInput } from "./SelectInput";
 import { YesNoInput } from "./YesNoInput";
 import { RadioInput } from "./RadioInput";
 import { GuidancePanel } from "./GuidancePanel";
+import { pickInputKind } from "@/lib/inputKind";
 
 interface QuestionCardProps {
   question: QuestionRead;
@@ -61,20 +62,7 @@ export function QuestionCard({
   const hasOptions = options.length > 0;
   const itype = question.input_type;
   const hasLegacyOptions = (question.options?.length ?? 0) > 0;
-  const choiceWithOptions =
-    hasOptions &&
-    (itype === "radio" || itype === "select" || itype === "checkbox" ||
-     itype === "yes_no" || itype === "multiselect");
-
-  type InputKind = "radio" | "select-legacy" | "yesno" | "date" | "text";
-  const inputKind: InputKind = (() => {
-    if (itype === "date") return "date";
-    if (choiceWithOptions) return "radio";
-    if (itype === "select" && hasLegacyOptions) return "select-legacy";
-    if (itype === "checkbox" || itype === "yes_no") return "yesno";
-    // text, number, signature, and option-less radio/select/multiselect
-    return "text";
-  })();
+  const inputKind = pickInputKind(itype, hasOptions, hasLegacyOptions);
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
