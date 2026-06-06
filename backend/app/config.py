@@ -3,6 +3,30 @@ import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 
+
+def _enable_os_trust() -> None:
+    """
+    Make Python's TLS use the operating-system trust store.
+
+    Corporate proxies / antivirus products that intercept HTTPS install their own
+    root CA into the OS store. Python's bundled certifi doesn't know that CA, so
+    outbound HTTPS (e.g. to the Anthropic API) fails with
+    CERTIFICATE_VERIFY_FAILED even though browsers and pip work fine. truststore
+    routes verification through the OS store, which fixes this. No-op when
+    truststore isn't installed or injection fails — we fall back to certifi, so
+    normal networks and Linux deploys are unaffected.
+
+    Runs at config import, before any HTTPS client (Anthropic SDK) is created.
+    """
+    try:
+        import truststore
+        truststore.inject_into_ssl()
+    except Exception:
+        pass
+
+
+_enable_os_trust()
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Vercel sets VERCEL=1 in all serverless environments

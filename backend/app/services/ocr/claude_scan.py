@@ -206,13 +206,10 @@ def extract_fields_from_scan(pdf_bytes: bytes) -> list[FieldMapEntry]:
         resp = client.messages.create(
             model=CLAUDE_VISION_MODEL,
             max_tokens=3000,
-            messages=[
-                {"role": "user", "content": content},
-                # Prefill so Claude emits a bare JSON object.
-                {"role": "assistant", "content": "{"},
-            ],
+            messages=[{"role": "user", "content": content}],
         )
-        data = _extract_json("{" + (resp.content[0].text or ""))
+        text = resp.content[0].text if resp.content else ""
+        data = _extract_json(text or "")
     except Exception as e:
         log.warning("claude_scan API call failed: %s", e)
         return []

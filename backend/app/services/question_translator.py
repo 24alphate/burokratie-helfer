@@ -896,14 +896,10 @@ Return ONLY valid JSON. No other text."""
             model=ANTHROPIC_MODEL,
             max_tokens=4000,
             temperature=0.1,
-            messages=[
-                {"role": "user", "content": prompt},
-                # Prefill the reply with "{" so Claude emits a bare JSON object.
-                {"role": "assistant", "content": "{"},
-            ],
+            messages=[{"role": "user", "content": prompt}],
         )
-        raw = "{" + (resp.content[0].text or "")
-        result = _extract_json(raw)
+        text = resp.content[0].text if resp.content else ""
+        result = _extract_json(text or "")
     except Exception:
         return static_fallback(fields, user_language)
 
