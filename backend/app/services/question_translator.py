@@ -870,10 +870,19 @@ def translate_fields(
     field_lines: list[str] = []
     for f in fields:
         line = f"- {f['field_name']} (type={f['field_type']}"
-        if f.get("options"):
+        opt_labels = f.get("option_labels") or {}
+        if opt_labels:
+            # value='German label' pairs so the model translates the REAL choice
+            # text (e.g. 0='Einzelfahrt') instead of the bare export code "0".
+            pairs = ", ".join(f"{v}={lbl!r}" for v, lbl in opt_labels.items())
+            line += f", options=[{pairs}]"
+        elif f.get("options"):
             line += f", options={f['options']}"
         if f.get("original_label") and f["original_label"] != f["field_name"]:
             line += f", label='{f['original_label']}'"
+        if f.get("section_title"):
+            # Section header gives a bare field name its real meaning.
+            line += f", section='{f['section_title']}'"
         line += ")"
         field_lines.append(line)
 
@@ -891,6 +900,13 @@ STRICT RULES:
 5. For number fields: always say what unit is needed (euros, kilometres, etc.).
 6. For checkbox fields: phrase as a yes/no question.
 7. Use formal/polite register appropriate for government forms.
+8. Use the "section" context to understand what a short field name means, and
+   make the question specific to it. Example: label 'Tag' with section 'Datum des
+   Schulausflugstages' means the DAY OF THE SCHOOL TRIP — ask "What day is the
+   school trip?", NOT "what day are you filling this form?". A field 'Ort' under
+   section 'Name und Anschrift der Schule' is the SCHOOL's town, not the user's.
+9. When options are given as value='label' pairs, translate the LABEL meaning;
+   the JSON key in translated_options stays the exact value (the part before '=').
 
 Form fields from the {source} document:
 {chr(10).join(field_lines)}
@@ -900,7 +916,7 @@ Respond with a single JSON object. Keys = exact field names above. For each fiel
 - "help": one simple helpful sentence in {target} (what to write and how)
 - "example": a concrete example answer in {target} (leave empty string if obvious)
 - "format": short format instruction in {target} (e.g. "DD.MM.YYYY", leave empty if not needed)
-- "translated_options": map each original option value to its {target} translation (empty object if no options)
+- "translated_options": map each option VALUE (the part before '=') to its {target} translation of that option's meaning (empty object if no options)
 
 Example if {target} were French:
 {{

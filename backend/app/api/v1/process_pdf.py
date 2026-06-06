@@ -55,6 +55,19 @@ router = APIRouter(tags=["stateless"])
 
 MAX_SIZE_BYTES = settings.max_upload_size_mb * 1024 * 1024
 
+# Feature D — semantic keys whose meaning depends on the field's section context.
+# A bare "Tag"/"Ort"/"Postleitzahl" maps to one of these, but the curated table
+# question assumes a personal/today context ("the day YOU fill this form",
+# "where YOU live"). When such a field also has a recovered section_title, we
+# skip the context-blind tables and let the AI translate with that context.
+_CONTEXT_AMBIGUOUS_SEMANTIC = {
+    "date.day", "date.month", "date.year",
+    "address.city", "address.postal_code", "address.street",
+    "address.house_number", "address.country",
+    "amount.count", "amount.eur",
+    "submission.date", "submission.place_date",
+}
+
 
 # ── Diagnostic response models ────────────────────────────────────────────────
 
@@ -392,6 +405,25 @@ async def process_pdf(
             log.info("process-pdf VISION_DONE labels=%d groups=%d field_count=%d",
                      len(enr.labels), len(enr.groups), len(extraction.fields))
 
+    # ── 1c. Option-label vision fallback (Feature E) ─────────────────────────
+    # Positional recovery (run during extraction) handles most German forms,
+    # where the choice label sits to the right of the box. For radios it missed,
+    # fall back to Claude Vision to read the option labels. No-op unless there
+    # are radios still lacking labels AND a usable Anthropic SDK/key — so forms
+    # that resolved positionally never incur an extra AI call.
+    if extraction.support_level == 2 and anthropic_available():
+        missing_opts = [
+            e for e in extraction.fields
+            if e.field_type == "radio" and e.options and not e.option_labels
+        ]
+        if missing_opts:
+            from app.services.ocr.claude_scan import recover_option_labels_via_vision
+            try:
+                recover_option_labels_via_vision(content, extraction.fields)
+                log.info("process-pdf OPTION_VISION_FALLBACK radios=%d", len(missing_opts))
+            except Exception as e:
+                log.warning("process-pdf OPTION_VISION_FALLBACK failed err=%s", e)
+
     # ── 2. Build raw_extracted_fields (BEFORE translation) ───────────────────
     raw_extracted_fields = [
         RawFieldEntry(
@@ -439,6 +471,20 @@ async def process_pdf(
         # falsely violate the Level 1 "ai_calls_made=0" invariant for
         # any verified template that legitimately marks fields as manual.
         if entry.confidence <= 0.5:
+            continue
+
+        # Feature D + E — route to the AI translator instead of the context-blind
+        # tables (incl. label-based verified entries) when:
+        #   (a) the field's meaning depends on its section — a bare "Tag" under
+        #       "Datum des Schulausflugstages" must NOT become "the day you fill
+        #       this form"; or
+        #   (b) it's a choice field whose real option labels we recovered and
+        #       want translated too (the tables don't translate options).
+        # Both conditions can only be true for Level 2/3 extractions — Level 1
+        # verified templates set neither section_title nor option_labels — so
+        # verified templates keep their curated, no-AI questions.
+        _ambiguous = entry.semantic_key in _CONTEXT_AMBIGUOUS_SEMANTIC and bool(entry.section_title)
+        if _ambiguous or entry.option_labels:
             continue
 
         # Priority 1: verified human question
@@ -494,7 +540,9 @@ async def process_pdf(
             "field_name":     e.field_id,
             "field_type":     e.field_type,
             "options":        e.options,
+            "option_labels":  e.option_labels,   # Feature E — real choice text
             "original_label": e.original_label,
+            "section_title":  e.section_title,    # Feature D — section context
         }
         for e in extraction.fields
         if e.field_id not in pre_resolved and e.confidence > 0.5

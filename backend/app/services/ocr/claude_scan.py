@@ -217,3 +217,123 @@ def extract_fields_from_scan(pdf_bytes: bytes) -> list[FieldMapEntry]:
     fields = _fields_from_payload(data)
     log.info("claude_scan extracted fields=%d pages=%d", len(fields), len(page_images))
     return fields
+
+
+def recover_option_labels_via_vision(pdf_bytes: bytes, fields: list) -> None:
+    """
+    Feature E fallback: fill `option_labels` for radio fields that the positional
+    page-text pass missed, by reading the rendered page with Claude Vision.
+
+    Mutates each target FieldMapEntry in place (sets entry.option_labels). Pure
+    best-effort: a no-op when there are no targets, no usable key/SDK/PyMuPDF,
+    render fails, the API errors, or the model returns a mismatched shape. Never
+    raises. The option VALUES are never changed — only their display labels.
+
+    Value↔label mapping is preserved by ordering each group's option widgets
+    top-to-bottom (then left-to-right) and asking Claude for labels in that same
+    visual order, so label[i] maps to the i-th widget's export value.
+    """
+    from app.services.question_translator import _resolve_anthropic_key, _extract_json
+    from app.services.pdf_pipeline import _collect_radio_option_widgets
+
+    targets = [
+        f for f in fields
+        if getattr(f, "field_type", "") == "radio"
+        and getattr(f, "options", None)
+        and not getattr(f, "option_labels", None)
+    ]
+    if not targets:
+        return
+
+    key = _resolve_anthropic_key()
+    if not key:
+        return
+    try:
+        import anthropic
+        import fitz  # PyMuPDF
+    except ImportError:
+        return
+
+    widgets = _collect_radio_option_widgets(pdf_bytes, {f.field_id for f in targets})
+    if not widgets:
+        return
+
+    by_field = {f.field_id: f for f in targets}
+    by_page: dict[int, list[str]] = {}
+    for fid in widgets:
+        f = by_field.get(fid)
+        if f:
+            by_page.setdefault(f.source_page, []).append(fid)
+
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    except Exception as e:
+        log.warning("recover_option_labels_via_vision render open failed: %s", e)
+        return
+
+    try:
+        client = anthropic.Anthropic(api_key=key)
+        zoom = RENDER_DPI / 72.0
+        mat = fitz.Matrix(zoom, zoom)
+        for page_num, fids in by_page.items():
+            pidx = page_num - 1
+            if pidx < 0 or pidx >= doc.page_count:
+                continue
+            try:
+                png = doc[pidx].get_pixmap(matrix=mat, alpha=False).tobytes("png")
+            except Exception:
+                continue
+
+            # Order each field's options top-to-bottom (PDF y is bottom-left, so
+            # a larger y-centre is higher on the page), then left-to-right.
+            field_specs: list[tuple[str, list[str]]] = []
+            for fid in fids:
+                ordered = sorted(
+                    widgets[fid],
+                    key=lambda vr: (-((vr[1][1] + vr[1][3]) / 2.0), vr[1][0]),
+                )
+                field_specs.append((fid, [v for (v, _r) in ordered]))
+
+            listing = "\n".join(
+                f'{i + 1}. field "{fid}" has {len(vals)} options (listed top to bottom)'
+                for i, (fid, vals) in enumerate(field_specs)
+            )
+            prompt = (
+                "This is a German government form page. For each multiple-choice "
+                "field listed below, read the German label printed next to each "
+                "option box, in order from top to bottom.\n"
+                f"{listing}\n"
+                'Return ONLY a JSON object mapping each field name to an array of '
+                'its option labels, with EXACTLY the stated number of labels per '
+                'field, copied verbatim in German (do not translate). Example: '
+                '{"field_x": ["Option A", "Option B"]}'
+            )
+            content = [
+                {"type": "image", "source": {
+                    "type": "base64", "media_type": "image/png",
+                    "data": base64.standard_b64encode(png).decode("ascii"),
+                }},
+                {"type": "text", "text": prompt},
+            ]
+            try:
+                resp = client.messages.create(
+                    model=CLAUDE_VISION_MODEL,
+                    max_tokens=1500,
+                    messages=[{"role": "user", "content": content}],
+                )
+                data = _extract_json(resp.content[0].text if resp.content else "")
+            except Exception as e:
+                log.warning("recover_option_labels_via_vision API failed: %s", e)
+                continue
+
+            for fid, vals in field_specs:
+                labels = data.get(fid) if isinstance(data, dict) else None
+                if isinstance(labels, list) and len(labels) == len(vals):
+                    entry = by_field[fid]
+                    for v, lbl in zip(vals, labels):
+                        lbl = str(lbl).strip()
+                        if lbl:
+                            entry.option_labels[v] = lbl
+            log.info("recover_option_labels_via_vision page=%d fields=%d", page_num, len(field_specs))
+    finally:
+        doc.close()
