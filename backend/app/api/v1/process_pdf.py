@@ -18,18 +18,17 @@ No database writes.  No file system writes.  Cold-start-proof.
 
 Diagnostic query parameters
 -----------------------------
-no_ai=true   Bypass Groq completely. Uses the raw PDF label as the question text.
+no_ai=true   Bypass the AI translator completely. Uses the raw PDF label as the question text.
              Use this to isolate whether wrong questions come from extraction or AI.
 
 The response always includes:
   raw_extracted_fields  — field map BEFORE translation (extraction ground truth)
   ai_comparison         — side-by-side original_label vs AI question for every field
-  ai_used               — whether Groq was attempted (false when no_ai=true or key missing)
+  ai_used               — whether the AI translator was attempted (false when no_ai=true or key missing)
 """
 from __future__ import annotations
 
 import logging
-import os
 from typing import Optional
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
@@ -44,7 +43,9 @@ from app.services.pdf_pipeline import (
     validate_no_hallucinations,
 )
 from app.services.pdf_token import sign_pdf_token
-from app.services.question_translator import translate_fields, static_fallback, get_deterministic_translation
+from app.services.question_translator import (
+    translate_fields, static_fallback, get_deterministic_translation, anthropic_key_configured,
+)
 from app.services.semantic_questions import infer_semantic_key, lookup_semantic
 from app.services.verified_questions import lookup_verified
 
@@ -94,7 +95,7 @@ class ProcessPdfResponse(BaseModel):
     # ai_comparison: original_label vs AI question, side by side.
     #   If ai_used=false for an entry, ai_question == original_label (no AI involved).
     ai_comparison: list[AIComparisonEntry] = []
-    # Whether Groq was called (false when no_ai=true or GROQ_API_KEY not set)
+    # Whether the AI translator was called (false when no_ai=true or ANTHROPIC_API_KEY not set)
     ai_used: bool = False
 
 
@@ -429,12 +430,12 @@ async def process_pdf(
                 "_source": "deterministic",
             }
 
-    # Build Groq input for unresolved fields only.
+    # Build the AI translator input for unresolved fields only.
     # Phase F1 follow-up: also skip manual (confidence <= 0.5) fields here
-    # so they don't show up in ai_call_count even when GROQ_API_KEY is unset
+    # so they don't show up in ai_call_count even when ANTHROPIC_API_KEY is unset
     # (translate_fields can still fall through to static_fallback). Same
     # rationale as the pre_resolved skip above.
-    fields_for_groq = [
+    fields_for_ai = [
         {
             "field_name":     e.field_id,
             "field_type":     e.field_type,
@@ -445,29 +446,29 @@ async def process_pdf(
         if e.field_id not in pre_resolved and e.confidence > 0.5
     ]
 
-    groq_key_set = bool(os.environ.get("GROQ_API_KEY", "").strip())
+    ai_key_set = anthropic_key_configured()
 
-    if no_ai or not fields_for_groq:
-        if fields_for_groq:
+    if no_ai or not fields_for_ai:
+        if fields_for_ai:
             # Use static fallback for unresolved fields when no_ai=True
-            ai_translations = static_fallback(fields_for_groq, user_language)
+            ai_translations = static_fallback(fields_for_ai, user_language)
             for fid in ai_translations:
                 ai_translations[fid]["_source"] = "deterministic"
         else:
             ai_translations = {}
         ai_was_used = False
-        log.info("process-pdf no_ai=%s groq_unresolved=%d pre_resolved=%d",
-                 no_ai, len(fields_for_groq), len(pre_resolved))
+        log.info("process-pdf no_ai=%s ai_unresolved=%d pre_resolved=%d",
+                 no_ai, len(fields_for_ai), len(pre_resolved))
     else:
-        ai_translations = translate_fields(fields_for_groq, user_language, document_language)
+        ai_translations = translate_fields(fields_for_ai, user_language, document_language)
         for fid in ai_translations:
             if "_source" not in ai_translations[fid]:
                 ai_translations[fid]["_source"] = "ai"
-        ai_was_used = groq_key_set
+        ai_was_used = ai_key_set
 
     # Merge: pre_resolved wins over AI (verified/semantic/deterministic beat AI)
     raw_translations = {**ai_translations, **pre_resolved}
-    ai_call_count = len(fields_for_groq) if not no_ai else 0
+    ai_call_count = len(fields_for_ai) if not no_ai else 0
     ai_skip_count = len(pre_resolved)
 
     # Level 1 invariant: verified templates must never reach Groq

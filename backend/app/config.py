@@ -31,10 +31,16 @@ class Settings(BaseSettings):
     cors_origins_raw: str = "http://localhost:3000"
     max_upload_size_mb: int = 10
     port: int = 8000
-    # Signing key for stateless PDF tokens — set SECRET_KEY env var in production.
-    # A random default is generated per-process so tokens expire on cold start,
-    # which is the right behavior: user must re-upload after a cold start anyway.
-    secret_key: str = os.urandom(32).hex()
+    # Signing key for stateless PDF tokens. ALWAYS set SECRET_KEY (env or .env):
+    # the os.urandom default is a last-resort fallback that changes on every
+    # process start, which invalidates any in-flight pdf_token across a dev
+    # server restart or a second worker/instance (BadSignature on /fill-pdf).
+    # A stable value keeps tokens valid for their full 4h lifetime.
+    secret_key: str = os.environ.get("SECRET_KEY") or os.urandom(32).hex()
+    # Anthropic API key for the question translator + Claude Vision OCR.
+    # When unset (or left as the REPLACE placeholder) translation falls back to
+    # the deterministic table — never an AI call, never a crash.
+    anthropic_api_key: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
