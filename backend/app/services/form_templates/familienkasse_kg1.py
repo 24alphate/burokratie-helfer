@@ -13,12 +13,11 @@ SHA256: 53651bbe336039b6ca3852f1fa7288b4841349afd1978a4b91469fea15eaac43
 
 Fingerprint
 -----------
-The form contains the literal phrases:
-  "Antrag auf Kindergeld"
-  "Familienkasse"
-  "Steuer-Identifikationsnummer"
-  "Anlage Kind"
-plus the section marker "Kontoverbindung" or "Bankverbindung".
+Required phrases (all): "Antrag auf Kindergeld", "Familienkasse",
+"Steuerliche Identifikationsnummer". Plus at least one KG1-only section
+marker ("Kontoverbindung" | "Familienstand" | "IBAN") — chosen because the
+companion "Anlage Kind" form shares all the required phrases but none of
+the markers, so it must NOT fingerprint as KG1.
 
 Field strategy (KG1 v1, locked in Phase F1 scope decisions)
 -----------------------------------------------------------
@@ -205,13 +204,17 @@ _REQUIRED = [
     "steuerliche identifikationsnummer",  # the form uses this German phrasing
 ]
 
-# Section markers — at least one must appear. Reduces collision with the
-# Anlage Kind form which also mentions Kindergeld but not these markers.
+# Section markers — at least one must appear. These phrases exist ONLY in the
+# full KG1 form, never in the companion "Anlage Kind" form (verified empirically
+# against the official kg1-anlagekind_ba033765.pdf): the Anlage shares
+# "antrag auf kindergeld" / "familienkasse" / "steuerliche identifikationsnummer"
+# with KG1, so the discriminator must be a KG1-only section. Do NOT add
+# "anlage kind" or "kindergeldnummer" here — both appear in the Anlage too and
+# caused a false-positive match that served KG1 questions for the wrong form.
 _SECTION_MARKERS = [
-    "anlage kind",
-    "kontoverbindung",
-    "zählkinder",
-    "kindergeldnummer",
+    "kontoverbindung",   # KG1 Punkt 3 heading
+    "familienstand",     # KG1 Punkt 1 marital-status block
+    "iban",              # KG1 bank section
 ]
 
 

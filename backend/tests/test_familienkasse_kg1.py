@@ -116,6 +116,64 @@ def _readback_pages(pdf_bytes: bytes) -> int:
     return len(PdfReader(io.BytesIO(pdf_bytes)).pages)
 
 
+# ── Fingerprint discrimination (Anlage Kind false-positive regression) ───────
+
+class TestKg1FingerprintDiscrimination:
+    """
+    The companion "Anlage Kind" form shares KG1's required phrases
+    ("antrag auf kindergeld", "familienkasse", "steuerliche
+    identifikationsnummer") but is a DIFFERENT form. It previously
+    fingerprinted as KG1 because "anlage kind" was a section marker —
+    serving 54 wrong questions and guaranteeing a zero-fill 500 at fill
+    time (the KG1 widget names don't exist in the Anlage). The markers
+    are now KG1-only sections (Kontoverbindung / Familienstand / IBAN).
+    """
+
+    def _tmpl(self):
+        from app.services.form_templates.familienkasse_kg1 import (
+            FamilienkasseKg1Template,
+        )
+        return FamilienkasseKg1Template()
+
+    def test_full_kg1_text_matches(self):
+        text = (
+            "Antrag auf Kindergeld Familienkasse "
+            "Steuerliche Identifikationsnummer Familienstand "
+            "Kontoverbindung IBAN"
+        )
+        assert self._tmpl().fingerprint(text) is True
+
+    def test_anlage_kind_text_does_not_match(self):
+        # Verbatim phrases from the official Anlage Kind first page
+        # (arbeitsagentur.de kg1-anlagekind_ba033765.pdf): every REQUIRED
+        # phrase is present, but none of the KG1-only section markers.
+        text = (
+            "Familienname und Vorname der antragstellenden Person Kindergeld-Nr. "
+            "Bitte beachten Sie die Hinweise zum Antrag auf Kindergeld und das "
+            "Merkblatt Kindergeld. Anlage Kind zum Antrag auf Kindergeld vom "
+            "Lfd. Nr. 1 Angaben zum Kind "
+            "Steuerliche Identifikationsnummer des Kindes "
+            "Familienkasse Kindergeldnummer"
+        )
+        assert self._tmpl().fingerprint(text) is False
+
+    def test_real_anlage_kind_pdf_routes_generic(self):
+        """When the official Anlage Kind PDF is present locally, it must
+        route to the generic AcroForm path (Level 2), not the KG1 template."""
+        path = os.path.join(
+            os.path.dirname(__file__), "..", "..",
+            "templates_source", "incoming", "kg1_anlage_kind.pdf",
+        )
+        if not os.path.exists(path):
+            pytest.skip("official Anlage Kind PDF not downloaded")
+        with open(path, "rb") as f:
+            pdf = f.read()
+        from app.services.pdf_pipeline import route_document
+        route = route_document(pdf)
+        assert route.template_id is None
+        assert route.support_level == 2
+
+
 # ── F6/1 — Process-pdf route assertions ──────────────────────────────────────
 
 class TestKg1ProcessRoute:
