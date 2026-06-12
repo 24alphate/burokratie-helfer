@@ -5,8 +5,8 @@ is **stateless and needs no database, no OCR, and no AI key** — so the deploy 
 just one FastAPI container + the existing Vercel frontend.
 
 > Why this is cheap: `process-pdf` and `fill-pdf` never touch the DB; KG1
-> fingerprints to Level 1 (verified template), so OCR is skipped and Groq is
-> never called (`ai_calls_made=0`). Mocks are fine for everything except the
+> fingerprints to Level 1 (verified template), so OCR is skipped and the AI
+> translator is never called (`ai_calls_made=0`). Mocks are fine for everything except the
 > actual fill, which uses PyMuPDF (already in `requirements.txt`).
 
 ---
@@ -31,13 +31,14 @@ already has [backend/Dockerfile](../burokratie-helfer/backend/Dockerfile) and
 | `SECRET_KEY` | a fixed 32-byte hex string (generate once, keep it) | **Critical.** Signs the PDF token. If unset, [config.py](../burokratie-helfer/backend/app/config.py) regenerates it per process, so every cold start invalidates all 4 h tokens and users get "session expired". |
 | `OCR_BACKEND` | `mock` | KG1 doesn't need OCR. |
 | `TRANSLATION_BACKEND` | `mock` | KG1 is verified → no AI translation. |
-| `GROQ_API_KEY` | *(optional)* free-tier key | Only needed so non-KG1 Level-2/3 forms also get translated. Not required to prove the KG1 loop. |
+| `ANTHROPIC_API_KEY` | *(optional)* | Only needed so non-verified Level-2/3 forms get AI translation + Claude Vision scanning. Not required to prove the KG1 loop. |
+| `CORS_ORIGINS_RAW` | your frontend URL, e.g. `https://your-app.vercel.app` | Locks the API to your frontend. If unset, CORS stays open to all origins (a startup warning is logged). |
 
 Generate a secret key: `python -c "import os; print(os.urandom(32).hex())"`.
 
-> CORS: `main.py` currently allows all origins (`*`, no credentials), so the
-> Vercel frontend works without extra config. Tighten to your Vercel URL later
-> if you add credentialed requests.
+> CORS: when `CORS_ORIGINS_RAW` is unset, `main.py` falls back to allowing all
+> origins (no credentials) so a first deploy works without config — set it to
+> your Vercel URL once the frontend URL is known.
 
 > DB note: `start.sh` runs `alembic upgrade head` + a template seed on boot.
 > Both target an ephemeral SQLite file inside the container (the default in

@@ -78,13 +78,16 @@ class TestPdfToken:
             verify_pdf_token(tampered, SECRET)
 
     def test_expired_token_raises_signature_expired(self):
-        """max_age=-1 makes every token appear expired (age always >= 0 > -1)."""
-        from app.services.pdf_token import _SALT
-        from itsdangerous import URLSafeTimedSerializer
+        """max_age=-1 makes every token appear expired (age always >= 0 > -1).
+
+        Uses the module's _serializer so the test stays in sync with the
+        production signing config (salt + SHA256 digest) instead of
+        re-deriving its own serializer with library defaults.
+        """
+        from app.services.pdf_token import _serializer
         token = sign_pdf_token(b"%PDF-1.4", ["X"], "f.pdf", SECRET)
-        s = URLSafeTimedSerializer(SECRET, salt=_SALT)
         with pytest.raises(SignatureExpired):
-            s.loads(token, max_age=-1)
+            _serializer(SECRET).loads(token, max_age=-1)
 
     def test_empty_field_ids_allowed(self):
         token = sign_pdf_token(b"%PDF-1.4", [], "f.pdf", SECRET)

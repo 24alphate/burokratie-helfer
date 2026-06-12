@@ -2,24 +2,25 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api } from "@/lib/api";
 import { useCaseStore } from "@/store/caseStore";
 import { ConfirmModal } from "@/components/layout/ConfirmModal";
 import { PrivacyNote } from "@/components/layout/PrivacyNote";
 import { LegalFooter } from "@/components/layout/LegalFooter";
 import { t } from "@/lib/i18n";
 
+// Only Tier-A locales are offered: these have complete human-verified
+// questions + guidance on the verified templates (KG1/BuT) and full UI
+// strings. es/fa/ru/uk were removed from the grid because verified KG1
+// questions don't exist for them yet — users would silently get English
+// questions, breaking the core promise. Re-add a locale only after its
+// verified_questions coverage is complete (see backend locale_quality).
 const LANGUAGES = [
   { code: "ar", label: "العربية", dir: "rtl" },
   { code: "tr", label: "Türkçe", dir: "ltr" },
   { code: "en", label: "English", dir: "ltr" },
   { code: "de", label: "Deutsch", dir: "ltr" },
   { code: "fr", label: "Français", dir: "ltr" },
-  { code: "es", label: "Español", dir: "ltr" },
   { code: "sq", label: "Shqip", dir: "ltr" },
-  { code: "fa", label: "فارسی", dir: "rtl" },
-  { code: "ru", label: "Русский", dir: "ltr" },
-  { code: "uk", label: "Українська", dir: "ltr" },
 ];
 
 const TOKEN_TTL_MS = 4 * 60 * 60 * 1000; // 4 hours
@@ -72,20 +73,15 @@ export default function LandingPage() {
   async function doStart(locale: string) {
     setLoading(true);
     setError(null);
-    try {
-      reset();
-      const session = await api.sessions.create(locale);
-      setSessionToken(session.session_token);
-      setLocale(locale);
-      const newCase = await api.cases.create(session.session_token);
-      setCaseId(newCase.id);
-      router.push(`/${locale}/upload`);
-    } catch (e: unknown) {
-      const { friendlyError } = await import("@/lib/errors");
-      setError(friendlyError(e, locale));
-    } finally {
-      setLoading(false);
-    }
+    // The active flow is fully stateless (/process-pdf + /fill-pdf need no
+    // session). sessionToken/caseId are kept as local identifiers only, so
+    // starting never depends on the backend DB being reachable.
+    reset();
+    setSessionToken(`local-${crypto.randomUUID()}`);
+    setLocale(locale);
+    setCaseId(`local-${crypto.randomUUID()}`);
+    router.push(`/${locale}/upload`);
+    setLoading(false);
   }
 
   async function handleStart() {

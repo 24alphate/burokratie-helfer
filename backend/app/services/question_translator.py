@@ -987,7 +987,7 @@ Return ONLY valid JSON. No other text."""
 
 def static_fallback(fields: list[dict], user_language: str) -> dict[str, dict]:
     """
-    Fallback when Groq is unavailable or no_ai=true.
+    Fallback when the AI translator (Claude) is unavailable or no_ai=true.
 
     Fallback order per field:
     1. Deterministic lookup (exact label, number-prefix-stripped, first-word)

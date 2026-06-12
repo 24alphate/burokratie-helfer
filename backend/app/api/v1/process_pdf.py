@@ -6,7 +6,7 @@ Replaces the two-step upload → extract-pdf-fields flow with a single call:
   Client sends: multipart PDF file + user_language
   Server:
     1. Extracts fields from the PDF (AcroForm or pdfplumber)
-    2. Translates field labels to the user's language via Groq
+    2. Translates field labels to the user's language (curated tables first, Claude second)
     3. Validates against anti-hallucination guard
     4. Signs a PDF token (contains pdf_bytes + field_ids — no DB write)
     5. Returns fields + extracted_field_ids + pdf_token + analysis_report
@@ -31,7 +31,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel
 
 from app.config import settings
@@ -92,7 +92,7 @@ class AIComparisonEntry(BaseModel):
     ai_question: str       # what AI returned (or original_label if no_ai=true / fallback)
     ai_explanation: str
     confidence: float
-    ai_used: bool          # False when no_ai=true or Groq fell back to static
+    ai_used: bool          # False when no_ai=true or the AI translator fell back to static
 
 
 class ProcessPdfResponse(BaseModel):
@@ -197,13 +197,14 @@ def _build_scanned_response(
 
 @router.post("/process-pdf", response_model=ProcessPdfResponse)
 async def process_pdf(
+    request: Request,
     file: UploadFile = File(...),
     user_language: str = Query("en"),
     document_language: str = Query("de"),
     no_ai: bool = Query(
         False,
         description=(
-            "Diagnostic: bypass Groq and use raw PDF labels as questions. "
+            "Diagnostic: bypass the AI translator and use raw PDF labels as questions. "
             "Use this to isolate whether wrong questions come from extraction or AI."
         ),
     ),
@@ -219,6 +220,17 @@ async def process_pdf(
     - grounding_rate is always 100% (anti-hallucination validator enforced).
     - No data written to disk or database.
     """
+    # Reject obviously oversized requests via Content-Length BEFORE buffering
+    # the body into memory. The post-read check below stays as the authority
+    # (Content-Length can be absent or lie); the multipart envelope adds a
+    # little overhead, hence the small allowance.
+    content_length = request.headers.get("content-length", "")
+    if content_length.isdigit() and int(content_length) > MAX_SIZE_BYTES + 16 * 1024:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large. Max {settings.max_upload_size_mb} MB.",
+        )
+
     content = await file.read()
     filename = file.filename or "form.pdf"
     size_kb = len(content) // 1024
@@ -573,7 +585,7 @@ async def process_pdf(
     ai_call_count = len(fields_for_ai) if not no_ai else 0
     ai_skip_count = len(pre_resolved)
 
-    # Level 1 invariant: verified templates must never reach Groq
+    # Level 1 invariant: verified templates must never reach the AI translator
     if extraction.extraction_source == "verified_template" and ai_call_count > 0:
         log.critical(
             "process-pdf BUG: verified template %s sent %d field(s) to AI — "

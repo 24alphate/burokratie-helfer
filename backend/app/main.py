@@ -98,9 +98,20 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# CORS: locked to the configured frontend origin(s). When CORS_ORIGINS_RAW is
+# not set (or explicitly "*") we fall back to allow-all so a fresh deploy
+# without env config still works — but we log loudly because an open backend
+# lets any website burn the Anthropic quota.
+_cors_origins = settings.cors_origins
+_cors_allow_all = (not _cors_origins) or ("*" in _cors_origins)
+if _cors_allow_all:
+    log.warning(
+        "CORS is open to ALL origins. Set CORS_ORIGINS_RAW to your frontend "
+        "URL(s) in production, e.g. CORS_ORIGINS_RAW=https://your-app.vercel.app"
+    )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"] if _cors_allow_all else _cors_origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],

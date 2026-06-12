@@ -10,6 +10,7 @@ import { useCaseStore } from "@/store/caseStore";
 import { api, API_BASE, isProductionWithoutApiUrl } from "@/lib/api";
 import { AnalysisReport, AIComparisonEntry, RawFieldEntry } from "@/types/api";
 import { t } from "@/lib/i18n";
+import { isDebugMode } from "@/lib/debug";
 
 // Map old short keys to centralized i18n keys (kept for minimal diff in JSX).
 function tu(key: string, locale: string): string {
@@ -103,7 +104,7 @@ function AIComparisonTable({ entries, aiUsed }: { entries: AIComparisonEntry[]; 
   return (
     <details className="mt-4 border border-gray-200 rounded-xl overflow-hidden" open>
       <summary className="cursor-pointer bg-gray-50 px-4 py-2 font-mono text-xs text-gray-500 hover:bg-gray-100 select-none">
-        MODE 3 — AI comparison ({entries.length} fields) — AI {aiUsed ? "✅ used (Groq)" : "⚠️ NOT used (no API key / fallback)"}
+        MODE 3 — AI comparison ({entries.length} fields) — AI {aiUsed ? "✅ used (Claude)" : "⚠️ NOT used (no API key / fallback)"}
       </summary>
       <div className="overflow-x-auto">
         <table className="w-full text-xs font-mono">
@@ -162,6 +163,7 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
     fields, pdfToken, pdfUploadedAt, lastSavedAt, currentFilename,
   } = useCaseStore();
   const [mounted, setMounted]         = useState(false);
+  const [debugMode, setDebugMode]     = useState(false);
   const [stage, setStage]             = useState<Stage>("idle");
   const [inputMode, setInputMode]     = useState<"choose" | "upload">("choose");
   const [error, setError]             = useState<string | null>(null);
@@ -176,7 +178,7 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
   const [aiUsed, setAiUsed]               = useState(false);
   const lastFileRef                        = useRef<File | null>(null);  // for re-run without AI
 
-  useEffect(() => { setMounted(true); setLocale(locale); }, [locale, setLocale]);
+  useEffect(() => { setMounted(true); setLocale(locale); setDebugMode(isDebugMode()); }, [locale, setLocale]);
 
   useEffect(() => {
     if (mounted && (!sessionToken || !caseId)) router.replace("/");
@@ -321,8 +323,8 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
         <StepProgress currentStep={0} locale={locale} />
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-2xl font-bold text-gray-900">{tu("title", locale)}</h1>
-          {/* MODE 1 toggle — visible in idle */}
-          {stage === "idle" && (
+          {/* MODE 1 toggle — developer diagnostic, hidden unless ?debug=1 */}
+          {stage === "idle" && debugMode && (
             <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
               <input
                 type="checkbox"
@@ -339,7 +341,7 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
 
         {noAiMode && stage === "idle" && (
           <div className="mb-4 p-3 bg-orange-50 border border-orange-300 rounded-lg text-orange-800 text-sm font-mono">
-            MODE 1 ACTIVE — Groq is bypassed. Questions will show raw PDF labels.
+            MODE 1 ACTIVE — the AI translator is bypassed. Questions will show raw PDF labels.
             Use this to verify extraction accuracy before AI translation.
           </div>
         )}
@@ -477,19 +479,24 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
                     {noAiMode && <span className="ml-2 text-orange-600 text-sm font-mono">[MODE 1: no AI]</span>}
                   </p>
                 </div>
+                {/* Technical extraction report — developer-only (English, jargon).
+                    End users get the localized SupportLevelBanner on the questions page. */}
+                {debugMode && (
                 <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 text-sm">
-                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-gray-600 font-mono text-xs">
-                    <span>pdf_type</span>          <span className={report.pdf_type === "verified_template" ? "text-green-700 font-bold" : ""}>{report.pdf_type}</span>
-                    <span>extraction_source</span>  <span className={report.extraction_source === "verified_template" ? "text-green-700 font-bold" : "text-amber-600"}>{report.extraction_source ?? "auto"}</span>
-                    {report.template_id && <><span>template_id</span><span className="text-green-700">{report.template_id}</span></>}
-                    <span>pages</span>             <span>{report.total_pages}</span>
-                    <span>fields extracted</span>  <span className="text-green-700">{report.field_count}</span>
-                    <span>questions shown</span>   <span className="text-green-700">{report.questions_shown}</span>
-                    {report.questions_blocked > 0 && <><span>blocked (low conf)</span><span className="text-amber-600">{report.questions_blocked}</span></>}
-                    {report.invented_questions_removed > 0 && <><span>invented removed</span><span className="text-red-600">{report.invented_questions_removed}</span></>}
-                    <span>grounding rate</span>    <span className="text-green-700 font-bold">{report.grounding_rate}</span>
-                    <span>AI used</span>           <span className={aiUsed ? "text-blue-600" : "text-orange-600"}>{aiUsed ? "yes (Groq)" : "no (raw labels)"}</span>
-                  </div>
+                  {debugMode && (
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-gray-600 font-mono text-xs">
+                      <span>pdf_type</span>          <span className={report.pdf_type === "verified_template" ? "text-green-700 font-bold" : ""}>{report.pdf_type}</span>
+                      <span>extraction_source</span>  <span className={report.extraction_source === "verified_template" ? "text-green-700 font-bold" : "text-amber-600"}>{report.extraction_source ?? "auto"}</span>
+                      {report.template_id && <><span>template_id</span><span className="text-green-700">{report.template_id}</span></>}
+                      <span>pages</span>             <span>{report.total_pages}</span>
+                      <span>fields extracted</span>  <span className="text-green-700">{report.field_count}</span>
+                      <span>questions shown</span>   <span className="text-green-700">{report.questions_shown}</span>
+                      {report.questions_blocked > 0 && <><span>blocked (low conf)</span><span className="text-amber-600">{report.questions_blocked}</span></>}
+                      {report.invented_questions_removed > 0 && <><span>invented removed</span><span className="text-red-600">{report.invented_questions_removed}</span></>}
+                      <span>grounding rate</span>    <span className="text-green-700 font-bold">{report.grounding_rate}</span>
+                      <span>AI used</span>           <span className={aiUsed ? "text-blue-600" : "text-orange-600"}>{aiUsed ? "yes (Claude)" : "no (raw labels)"}</span>
+                    </div>
+                  )}
                   {report.extraction_source === "verified_template" && (
                     <p className="mt-3 text-xs text-green-700 bg-green-50 border border-green-200 rounded px-2 py-1.5">
                       ✅ Verified template matched — all {report.field_count} fields are hand-verified, confidence 1.0
@@ -501,6 +508,7 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
                     </p>
                   )}
                 </div>
+                )}
 
                 {/* Action buttons */}
                 <div className="flex gap-3 mt-4">
@@ -510,7 +518,7 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
                   >
                     {t("upload.continue_to_questions", locale)}
                   </button>
-                  {!noAiMode && (
+                  {debugMode && !noAiMode && (
                     <button
                       onClick={handleRerunNoAi}
                       className="px-4 py-3 border-2 border-orange-300 text-orange-700 rounded-xl font-mono text-sm hover:bg-orange-50 transition-colors whitespace-nowrap"
@@ -544,7 +552,7 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
                     className="px-6 py-3 bg-brand-600 text-white rounded-xl font-semibold hover:bg-brand-700">
                     {t("upload.continue", locale)} →
                   </button>
-                  {!noAiMode && (
+                  {debugMode && !noAiMode && (
                     <button onClick={handleRerunNoAi}
                       className="px-4 py-3 border-2 border-orange-300 text-orange-700 rounded-xl font-mono text-sm hover:bg-orange-50">
                       Re-run MODE 1 (no AI)
@@ -554,11 +562,9 @@ export default function UploadPage({ params }: { params: { locale: string } }) {
               </div>
             )}
 
-            {/* MODE 2: Raw extraction table */}
-            <RawExtractionTable fields={rawFields} />
-
-            {/* MODE 3: AI comparison table */}
-            <AIComparisonTable entries={aiComparison} aiUsed={aiUsed} />
+            {/* MODE 2 + 3 diagnostic tables — developer-only */}
+            {debugMode && <RawExtractionTable fields={rawFields} />}
+            {debugMode && <AIComparisonTable entries={aiComparison} aiUsed={aiUsed} />}
           </div>
         )}
       </main>

@@ -13,11 +13,11 @@ import { DeleteSavedData } from "@/components/layout/DeleteSavedData";
 import { PrivacyNote } from "@/components/layout/PrivacyNote";
 import { LegalFooter } from "@/components/layout/LegalFooter";
 import { useCaseStore } from "@/store/caseStore";
-import { api } from "@/lib/api";
 import { AnalysisReport, QuestionRead, FieldDefinition } from "@/types/api";
 import { getGroundedFields, getApplicableQuestionFields } from "@/lib/applicableFields";
 import { cleanHumanLabel } from "@/lib/labelUtils";
 import { t as ti18n } from "@/lib/i18n";
+import { isDebugMode } from "@/lib/debug";
 
 const LOADING: Record<string, string> = {
   en: "Reading your document…", de: "Dokument wird gelesen…",
@@ -55,7 +55,7 @@ const BLOCKED_BANNER: Record<string, (n: number) => string> = {
 };
 
 // ── Debug panel ───────────────────────────────────────────────────────────────
-// Always visible (not gated on NODE_ENV). Shows exact grounding proof.
+// Developer-only: rendered when isDebugMode() (?debug=1). Shows exact grounding proof.
 
 interface DebugPanelProps {
   caseId: string | null;
@@ -231,14 +231,15 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
     supportLevel, templateId, ocrDiagnostic,
   } = useCaseStore();
   const [mounted, setMounted]       = useState(false);
-  const [isLoading, setIsLoading]   = useState(false);
+  const [debugMode, setDebugMode]   = useState(false);
+  const [isLoading] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
   const [showNewDocModal, setShowNewDocModal] = useState(false);
   const [saveMsg, setSaveMsg]       = useState<string | null>(null);
 
   // ALL hooks before any conditional return
-  useEffect(() => { setMounted(true); }, []);
+  useEffect(() => { setMounted(true); setDebugMode(isDebugMode()); }, []);
 
   // Read ?focus=<field_key> from URL so the review page can deep-link back here
   useEffect(() => {
@@ -361,16 +362,18 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
               {ti18n("q.upload_again", locale)}
             </button>
           </div>
-          <DebugPanel
-            caseId={caseId}
-            documentId={documentId}
-            extractedFieldIds={safeExtracted}
-            questionFieldIds={safeFields.map((f) => f.key)}
-            blockedByGuard={safeFields.map((f) => f.key)}
-            report={null}
-            questionFields={[]}
-            locale={locale}
-          />
+          {debugMode && (
+            <DebugPanel
+              caseId={caseId}
+              documentId={documentId}
+              extractedFieldIds={safeExtracted}
+              questionFieldIds={safeFields.map((f) => f.key)}
+              blockedByGuard={safeFields.map((f) => f.key)}
+              report={null}
+              questionFields={[]}
+              locale={locale}
+            />
+          )}
         </main>
       </>
     );
@@ -597,15 +600,9 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
 
   async function handleAnswer(rawAnswer: string) {
     if (!currentField) return;
-    setIsLoading(true);
     setSubmitError(null);
-    try {
-      if (sessionToken && caseId) {
-        api.questions.submitAnswer(sessionToken, caseId, currentField.key, rawAnswer).catch(() => {});
-      }
-    } finally {
-      setIsLoading(false);
-    }
+    // Answers live only in the local store (privacy: nothing is sent to the
+    // server until the user explicitly generates the PDF on the review page).
     addAnswer(currentField.key, rawAnswer);
     // Return to normal sequential flow after answering a jump-to question
     setFocusedKey(null);
@@ -787,17 +784,19 @@ export default function QuestionsPage({ params }: { params: { locale: string } }
           <LegalFooter locale={locale} className="flex items-center justify-center gap-4 text-xs text-gray-400" />
         </div>
 
-        {/* Always-visible debug panel — shows grounding proof and question quality */}
-        <DebugPanel
-          caseId={caseId}
-          documentId={documentId}
-          extractedFieldIds={safeExtracted}
-          questionFieldIds={questionFields.map((f) => f.key)}
-          blockedByGuard={blockedByGuard.map((f) => f.key)}
-          report={null}
-          questionFields={questionFields}
-          locale={locale}
-        />
+        {/* Grounding debug panel — developer-only (?debug=1) */}
+        {debugMode && (
+          <DebugPanel
+            caseId={caseId}
+            documentId={documentId}
+            extractedFieldIds={safeExtracted}
+            questionFieldIds={questionFields.map((f) => f.key)}
+            blockedByGuard={blockedByGuard.map((f) => f.key)}
+            report={null}
+            questionFields={questionFields}
+            locale={locale}
+          />
+        )}
       </main>
     </>
   );

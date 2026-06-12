@@ -53,7 +53,10 @@ class Settings(BaseSettings):
     generated_dir: str = _DEFAULT_GENERATED
     static_pdfs_dir: str = str(BASE_DIR / "static_pdfs")
     form_templates_dir: str = str(Path(__file__).resolve().parent / "form_templates")
-    cors_origins_raw: str = "http://localhost:3000"
+    # Comma-separated list of allowed frontend origins. Empty/unset (or "*")
+    # → CORS allows all origins (with a startup warning). Set this in
+    # production: CORS_ORIGINS_RAW=https://your-frontend.vercel.app
+    cors_origins_raw: str = ""
     max_upload_size_mb: int = 10
     port: int = 8000
     # Signing key for stateless PDF tokens. ALWAYS set SECRET_KEY (env or .env):

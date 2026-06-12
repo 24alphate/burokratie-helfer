@@ -13,7 +13,7 @@ Token contents (signed, NOT encrypted):
   }
 
 Security:
-  The token is HMAC-SHA1 signed.  Its payload is readable (not encrypted), which
+  The token is HMAC-SHA256 signed.  Its payload is readable (not encrypted), which
   is fine because the PDF was already uploaded by the user — there is no server-side
   secret embedded in it.  The signature prevents forgery.
 
@@ -24,16 +24,24 @@ Expiry:
 from __future__ import annotations
 
 import base64
+import hashlib
 import zlib
 
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
-_SALT = "pdf-token-v1"
+# Salt v2: tokens are HMAC-SHA256 signed (itsdangerous defaults to SHA1).
+# Bumping the salt cleanly invalidates any SHA1-signed v1 token instead of
+# producing confusing signature mismatches.
+_SALT = "pdf-token-v2"
 _MAX_AGE = 4 * 60 * 60  # 4 hours in seconds
 
 
 def _serializer(secret_key: str) -> URLSafeTimedSerializer:
-    return URLSafeTimedSerializer(secret_key, salt=_SALT)
+    return URLSafeTimedSerializer(
+        secret_key,
+        salt=_SALT,
+        signer_kwargs={"digest_method": hashlib.sha256},
+    )
 
 
 def sign_pdf_token(

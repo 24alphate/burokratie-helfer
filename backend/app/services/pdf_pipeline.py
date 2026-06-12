@@ -694,7 +694,7 @@ def _annotate_semantic_keys(fields: list[FieldMapEntry]) -> None:
     is found, the priority-2 lookup (`lookup_semantic`) becomes available
     for that field, which means many common AcroForm labels (Vorname,
     Geburtsdatum, PLZ, Ort, …) get a multi-locale verified question
-    without ever calling Groq.
+    without ever calling the AI translator.
 
     Safe and additive: never overwrites an existing semantic_key (e.g. set
     by a verified template), never raises, never changes field_id.
