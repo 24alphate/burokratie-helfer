@@ -110,6 +110,15 @@ def fill_acroform_via_fitz(
                     # Read the widget's own on_state (typically "Yes" but
                     # can vary per PDF — e.g. "/Yes", "/On", or a custom
                     # name). Use it for truthy answers; "Off" for falsy.
+                    #
+                    # NOTE (verified empirically on KG1 + Anlage Kind):
+                    # PyMuPDF's checkbox setter accepts only True/"Yes" to
+                    # check a box — passing the widget's raw appearance
+                    # value (e.g. "1" from button_states()) results in Off.
+                    # fitz synthesizes the checked appearance itself on
+                    # update(), so writing the on_state() string ("Yes") is
+                    # correct even when the original /AP states are named
+                    # differently. Do NOT "improve" this to button_states().
                     on_state_fn = getattr(w, "on_state", None)
                     on_state = on_state_fn() if callable(on_state_fn) else None
                     truthy = str(value).strip().lower() in {

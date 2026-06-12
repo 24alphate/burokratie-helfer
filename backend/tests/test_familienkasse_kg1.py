@@ -157,9 +157,9 @@ class TestKg1FingerprintDiscrimination:
         )
         assert self._tmpl().fingerprint(text) is False
 
-    def test_real_anlage_kind_pdf_routes_generic(self):
-        """When the official Anlage Kind PDF is present locally, it must
-        route to the generic AcroForm path (Level 2), not the KG1 template."""
+    def test_real_anlage_kind_pdf_routes_to_its_own_template(self):
+        """The official Anlage Kind PDF must never route to the KG1 template.
+        Since kg1_anlage_kind_v1 exists it routes there (Level 1)."""
         path = os.path.join(
             os.path.dirname(__file__), "..", "..",
             "templates_source", "incoming", "kg1_anlage_kind.pdf",
@@ -170,8 +170,9 @@ class TestKg1FingerprintDiscrimination:
             pdf = f.read()
         from app.services.pdf_pipeline import route_document
         route = route_document(pdf)
-        assert route.template_id is None
-        assert route.support_level == 2
+        assert route.template_id != "familienkasse_kg1_v1"
+        assert route.template_id == "kg1_anlage_kind_v1"
+        assert route.support_level == 1
 
 
 # ── F6/1 — Process-pdf route assertions ──────────────────────────────────────

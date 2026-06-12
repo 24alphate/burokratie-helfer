@@ -340,7 +340,12 @@ def _all_templates() -> list[VerifiedTemplate]:
     if _TEMPLATES_CACHE is None:
         from app.services.form_templates.jobcenter_but import JobcenterButTemplate
         from app.services.form_templates.familienkasse_kg1 import FamilienkasseKg1Template
-        _TEMPLATES_CACHE = [JobcenterButTemplate(), FamilienkasseKg1Template()]
+        from app.services.form_templates.kg1_anlage_kind import Kg1AnlageKindTemplate
+        _TEMPLATES_CACHE = [
+            JobcenterButTemplate(),
+            FamilienkasseKg1Template(),
+            Kg1AnlageKindTemplate(),
+        ]
         for t in _TEMPLATES_CACHE:
             errors = validate_template(t)
             for err in errors:
