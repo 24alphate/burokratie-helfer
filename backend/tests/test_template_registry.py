@@ -169,3 +169,53 @@ class TestValidateTemplate:
         tmpl = JobcenterButTemplate()
         errors = validate_template(tmpl)
         assert errors == [], f"Template contract violations:\n" + "\n".join(errors)
+
+    def test_all_registered_templates_pass_validation(self):
+        from app.services.form_templates import _all_templates
+        for tmpl in _all_templates():
+            errors = validate_template(tmpl)
+            assert errors == [], (
+                f"{tmpl.template_id} contract violations:\n" + "\n".join(errors)
+            )
+
+
+# ── 6. Fingerprint discrimination across the registered family ───────────────
+
+class TestFingerprintDiscrimination:
+    """No form may fingerprint as more than one template. The KiZ and KG
+    families share many phrases ('Familienkasse', 'Familienstand',
+    'Anlage Kind'), so each template's markers must be mutually exclusive."""
+
+    def test_kiz1_text_matches_only_kiz1(self):
+        from app.services.form_templates import _all_templates
+        text = (
+            "Antrag auf Kinderzuschlag Familienkasse Familienstand "
+            "Angaben zu meiner Kontoverbindung KiZ 1 - Seite 1/2"
+        )
+        matches = [t.template_id for t in _all_templates() if t.fingerprint(text)]
+        assert matches == ["kiz1_antrag_v1"], matches
+
+    def test_kiz_anlage_kind_text_matches_nothing(self):
+        # KiZ Anlage Kind: shares 'antrag auf kinderzuschlag' + 'anlage kind'
+        # but has neither the KiZ1 footer nor any KG marker.
+        from app.services.form_templates import _all_templates
+        text = (
+            "Anlage Kind zum Antrag auf Kinderzuschlag Familienkasse "
+            "Angaben zum Kind Steuerliche Identifikationsnummer des Kindes"
+        )
+        matches = [t.template_id for t in _all_templates() if t.fingerprint(text)]
+        assert matches == [], matches
+
+    def test_real_kiz1_pdf_routes_to_kiz1(self):
+        path = os.path.join(
+            os.path.dirname(__file__), "..", "..",
+            "templates_source", "incoming", "kiz1_antrag.pdf",
+        )
+        if not os.path.exists(path):
+            pytest.skip("official KiZ1 PDF not downloaded")
+        with open(path, "rb") as f:
+            pdf = f.read()
+        from app.services.pdf_pipeline import route_document
+        route = route_document(pdf)
+        assert route.template_id == "kiz1_antrag_v1"
+        assert route.support_level == 1
