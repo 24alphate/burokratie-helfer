@@ -259,6 +259,33 @@ class TestFingerprintDiscrimination:
         assert route.template_id == "kiz1_anlage_antragsteller_v1"
         assert route.support_level == 1
 
+    def test_buergergeld_haupt_text_matches_only_bg(self):
+        # The Bürgergeld Hauptantrag is a Jobcenter form like BuT, but lacks
+        # "persönliche angaben" (it uses "persönliche daten") so it must not
+        # match the BuT template, and carries the unique "jobcenter-ha" footer.
+        from app.services.form_templates import _all_templates
+        text = (
+            "Hauptantrag Bürgergeld Antrag auf Bürgergeld nach dem Zweiten Buch "
+            "Sozialgesetzbuch SGB II Persönliche Daten der antragstellenden Person "
+            "Jobcenter-HA - 04/2026 Seite 1 von 8"
+        )
+        matches = [t.template_id for t in _all_templates() if t.fingerprint(text)]
+        assert matches == ["buergergeld_hauptantrag_v1"], matches
+
+    def test_real_buergergeld_haupt_pdf_routes_correctly(self):
+        path = os.path.join(
+            os.path.dirname(__file__), "..", "..",
+            "templates_source", "incoming", "buergergeld_hauptantrag.pdf",
+        )
+        if not os.path.exists(path):
+            pytest.skip("official Bürgergeld Hauptantrag PDF not downloaded")
+        with open(path, "rb") as f:
+            pdf = f.read()
+        from app.services.pdf_pipeline import route_document
+        route = route_document(pdf)
+        assert route.template_id == "buergergeld_hauptantrag_v1"
+        assert route.support_level == 1
+
     def test_real_kiz1_pdf_routes_to_kiz1(self):
         path = os.path.join(
             os.path.dirname(__file__), "..", "..",

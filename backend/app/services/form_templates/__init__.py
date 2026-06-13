@@ -176,6 +176,12 @@ class VerifiedTemplate(ABC):
     #                    widgets via PyPDFGenerator. WriteSpecs are not
     #                    needed. Engine still applies the Phase E1 strict
     #                    policy (no summary/minimal fallback, no zero-fill).
+    #   "fitz_acroform"— PyMuPDF widget writer for XFA-stub PDFs whose /Btn
+    #                    widgets lack /AP (KG1, KiZ). Checkboxes via on_state.
+    #   "pypdf_native" — PyPDF writer for born-AcroForm PDFs with CUSTOM button
+    #                    export values + native radios (e.g. Bürgergeld:
+    #                    checkboxes export "selektiert", radios "0"/"1").
+    #                    Writes the real on-state / export value.
     fill_strategy: str = "fitz_overlay"
 
     @abstractmethod
@@ -243,10 +249,10 @@ def validate_template(t: VerifiedTemplate) -> list[str]:
     # Phase F6 added "fitz_acroform" for XFA-style PDFs whose /Btn widgets
     # have no /AP appearance (PyPDF can't write them; fitz can).
     strategy = getattr(t, "fill_strategy", "fitz_overlay")
-    if strategy not in ("fitz_overlay", "acroform", "fitz_acroform"):
+    if strategy not in ("fitz_overlay", "acroform", "fitz_acroform", "pypdf_native"):
         errors.append(
             f"INVALID_FILL_STRATEGY: {strategy!r} "
-            f"(must be 'fitz_overlay', 'acroform', or 'fitz_acroform')"
+            f"(must be 'fitz_overlay', 'acroform', 'fitz_acroform', or 'pypdf_native')"
         )
 
     # Unique field_ids
@@ -346,6 +352,9 @@ def _all_templates() -> list[VerifiedTemplate]:
         from app.services.form_templates.kiz1_anlage_antragsteller import (
             Kiz1AnlageAntragstellerTemplate,
         )
+        from app.services.form_templates.buergergeld_hauptantrag import (
+            BuergergeldHauptantragTemplate,
+        )
         _TEMPLATES_CACHE = [
             JobcenterButTemplate(),
             FamilienkasseKg1Template(),
@@ -353,6 +362,7 @@ def _all_templates() -> list[VerifiedTemplate]:
             Kiz1AntragTemplate(),
             Kiz1AnlageKindTemplate(),
             Kiz1AnlageAntragstellerTemplate(),
+            BuergergeldHauptantragTemplate(),
         ]
         for t in _TEMPLATES_CACHE:
             errors = validate_template(t)

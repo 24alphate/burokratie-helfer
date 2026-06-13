@@ -437,6 +437,66 @@ async def fill_pdf(body: FillPdfRequest):
                     },
                 )
 
+            # ── 3a-iv. Verified template + pypdf_native fill ───────────────
+            # PyPDF writer for born-AcroForm PDFs with custom button export
+            # values (e.g. Bürgergeld: checkboxes "selektiert", native radios
+            # "0"/"1"). Same strict policy as the other AcroForm branches.
+            if template_fill_strategy == "pypdf_native":
+                expanded_answers = expand_logical_fields(template, body.answers)
+
+                from app.services.pdf_generator.pypdf_native_fill import (
+                    fill_native_acroform_via_pypdf,
+                )
+                try:
+                    result = fill_native_acroform_via_pypdf(pdf_bytes, expanded_answers)
+                except Exception as e:
+                    log.critical(
+                        "fill-pdf VERIFIED_PYPDF_NATIVE_CRASHED template_id=%s err=%s",
+                        template_id, e,
+                    )
+                    raise HTTPException(
+                        status_code=500,
+                        detail=(
+                            "We could not safely fill this PDF. Please try "
+                            "another PDF or fill this one manually."
+                        ),
+                    )
+
+                if result.warnings:
+                    log.warning(
+                        "fill-pdf VERIFIED_PYPDF_NATIVE_WARNINGS template_id=%s: %s",
+                        template_id, result.warnings,
+                    )
+
+                if result.field_count_filled == 0 and len(expanded_answers) > 0:
+                    log.critical(
+                        "fill-pdf VERIFIED_PYPDF_NATIVE_ZERO_FILL template_id=%s answers=%d",
+                        template_id, len(expanded_answers),
+                    )
+                    raise HTTPException(
+                        status_code=500,
+                        detail=(
+                            "We could not safely fill this PDF. Please try "
+                            "another PDF or fill this one manually."
+                        ),
+                    )
+
+                log.info(
+                    "fill-pdf VERIFIED_PYPDF_NATIVE_DONE template_id=%s filled=%d",
+                    template_id, result.field_count_filled,
+                )
+                return Response(
+                    content=result.pdf_bytes,
+                    media_type="application/pdf",
+                    headers={
+                        "Content-Disposition": f'attachment; filename="{safe_name}"',
+                        "X-Fill-Strategy": "acroform",
+                        "X-Fields-Filled": str(result.field_count_filled),
+                        "Access-Control-Expose-Headers":
+                            "X-Fill-Strategy,X-Fields-Filled,X-Not-Fillable-Fields",
+                    },
+                )
+
             # Defence in depth: an unknown strategy on a Level 1 template is
             # a config bug. Refuse rather than silently fall through to the
             # legacy AcroForm/summary path below.

@@ -492,12 +492,15 @@ async def process_pdf(
         #       this form"; or
         #   (b) it's a choice field whose real option labels we recovered and
         #       want translated too (the tables don't translate options).
-        # Both conditions can only be true for Level 2/3 extractions — Level 1
-        # verified templates set neither section_title nor option_labels — so
-        # verified templates keep their curated, no-AI questions.
-        _ambiguous = entry.semantic_key in _CONTEXT_AMBIGUOUS_SEMANTIC and bool(entry.section_title)
-        if _ambiguous or entry.option_labels:
-            continue
+        # This routing applies ONLY to non-verified Level 2/3 extractions.
+        # Verified templates must always pre-resolve (the Level 1 ai_calls=0
+        # invariant) — and a verified radio may legitimately carry option_labels
+        # for display (e.g. Bürgergeld's native Ja/Nein radios), which must NOT
+        # be mistaken for the Feature-E "recovered labels need translation" case.
+        if prefer_strict:  # prefer_strict == (extraction is NOT a verified template)
+            _ambiguous = entry.semantic_key in _CONTEXT_AMBIGUOUS_SEMANTIC and bool(entry.section_title)
+            if _ambiguous or entry.option_labels:
+                continue
 
         # Priority 1: verified human question
         verified = (lookup_verified_strict if prefer_strict else lookup_verified)(
@@ -761,8 +764,10 @@ async def process_pdf(
             tmpl = find_template_by_id(extraction.template_id)
             if tmpl is not None:
                 _raw = getattr(tmpl, "fill_strategy", "fitz_overlay")
-                # Normalize fitz_acroform → acroform for the public surface
-                fill_strategy = "acroform" if _raw == "fitz_acroform" else _raw
+                # Normalize the AcroForm-writing backends (fitz_acroform,
+                # pypdf_native) → "acroform" for the public surface; all write
+                # into the original PDF's widgets.
+                fill_strategy = "acroform" if _raw in ("fitz_acroform", "pypdf_native") else _raw
     elif extraction.support_level == 2:
         fill_strategy = "acroform"
     elif extraction.support_level == 3:
