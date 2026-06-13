@@ -195,16 +195,43 @@ class TestFingerprintDiscrimination:
         matches = [t.template_id for t in _all_templates() if t.fingerprint(text)]
         assert matches == ["kiz1_antrag_v1"], matches
 
-    def test_kiz_anlage_kind_text_matches_nothing(self):
-        # KiZ Anlage Kind: shares 'antrag auf kinderzuschlag' + 'anlage kind'
-        # but has neither the KiZ1 footer nor any KG marker.
+    def test_kiz_anlage_kind_text_matches_only_kizank(self):
+        # The real KiZ Anlage Kind has its own template now, anchored on the
+        # 'kiz 1-ank' footer + 'mehrbedarf des kindes'. It must match ONLY that
+        # one, never the KiZ1 main or any KG template.
         from app.services.form_templates import _all_templates
         text = (
             "Anlage Kind zum Antrag auf Kinderzuschlag Familienkasse "
-            "Angaben zum Kind Steuerliche Identifikationsnummer des Kindes"
+            "Verwandtschaftsverhältnis des Kindes Mehrbedarf des Kindes "
+            "KiZ 1-AnK - Seite 1/2"
         )
         matches = [t.template_id for t in _all_templates() if t.fingerprint(text)]
-        assert matches == [], matches
+        assert matches == ["kiz1_anlage_kind_v1"], matches
+
+    def test_kg_anlage_kind_text_matches_only_kg_ank(self):
+        # The KG (Kindergeld) Anlage Kind shares 'anlage kind' with the KiZ
+        # forms but carries the 'kg 1 ank' footer + 'kindschaftsverhältnis'.
+        from app.services.form_templates import _all_templates
+        text = (
+            "Anlage Kind zum Antrag auf Kindergeld Familienkasse "
+            "Kindschaftsverhältnis Angaben zum Kind KG 1 AnK - Seite 1/4"
+        )
+        matches = [t.template_id for t in _all_templates() if t.fingerprint(text)]
+        assert matches == ["kg1_anlage_kind_v1"], matches
+
+    def test_real_kiz_anlage_kind_pdf_routes_to_kizank(self):
+        path = os.path.join(
+            os.path.dirname(__file__), "..", "..",
+            "templates_source", "incoming", "kiz1_anlage_kind.pdf",
+        )
+        if not os.path.exists(path):
+            pytest.skip("official KiZ Anlage Kind PDF not downloaded")
+        with open(path, "rb") as f:
+            pdf = f.read()
+        from app.services.pdf_pipeline import route_document
+        route = route_document(pdf)
+        assert route.template_id == "kiz1_anlage_kind_v1"
+        assert route.support_level == 1
 
     def test_real_kiz1_pdf_routes_to_kiz1(self):
         path = os.path.join(

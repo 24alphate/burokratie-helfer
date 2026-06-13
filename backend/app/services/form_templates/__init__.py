@@ -342,11 +342,13 @@ def _all_templates() -> list[VerifiedTemplate]:
         from app.services.form_templates.familienkasse_kg1 import FamilienkasseKg1Template
         from app.services.form_templates.kg1_anlage_kind import Kg1AnlageKindTemplate
         from app.services.form_templates.kiz1_antrag import Kiz1AntragTemplate
+        from app.services.form_templates.kiz1_anlage_kind import Kiz1AnlageKindTemplate
         _TEMPLATES_CACHE = [
             JobcenterButTemplate(),
             FamilienkasseKg1Template(),
             Kg1AnlageKindTemplate(),
             Kiz1AntragTemplate(),
+            Kiz1AnlageKindTemplate(),
         ]
         for t in _TEMPLATES_CACHE:
             errors = validate_template(t)
