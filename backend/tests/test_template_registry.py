@@ -233,6 +233,32 @@ class TestFingerprintDiscrimination:
         assert route.template_id == "kiz1_anlage_kind_v1"
         assert route.support_level == 1
 
+    def test_kiz_anlage_antragsteller_text_matches_only_kizana(self):
+        # The KiZ Anlage Antragsteller shares 'anlage antragsteller' with the
+        # KiZ1 main (which references it), but carries the unique 'kiz 1-ana'
+        # footer. It must match ONLY its own template.
+        from app.services.form_templates import _all_templates
+        text = (
+            "Anlage Antragsteller(in) und Partner(in) zum Antrag auf "
+            "Kinderzuschlag Familienkasse Vermögen KiZ 1-AnA - Seite 1/3"
+        )
+        matches = [t.template_id for t in _all_templates() if t.fingerprint(text)]
+        assert matches == ["kiz1_anlage_antragsteller_v1"], matches
+
+    def test_real_kiz_anlage_antragsteller_pdf_routes_correctly(self):
+        path = os.path.join(
+            os.path.dirname(__file__), "..", "..",
+            "templates_source", "incoming", "kiz1_anlage_antragsteller.pdf",
+        )
+        if not os.path.exists(path):
+            pytest.skip("official KiZ Anlage Antragsteller PDF not downloaded")
+        with open(path, "rb") as f:
+            pdf = f.read()
+        from app.services.pdf_pipeline import route_document
+        route = route_document(pdf)
+        assert route.template_id == "kiz1_anlage_antragsteller_v1"
+        assert route.support_level == 1
+
     def test_real_kiz1_pdf_routes_to_kiz1(self):
         path = os.path.join(
             os.path.dirname(__file__), "..", "..",
